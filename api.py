@@ -70,7 +70,7 @@ class QuestionGenerateRequest(BaseModel):
     competency: str
     difficulty: str = Field("Medium", pattern="^(Easy|Medium|Hard)$")
     jd_text: str
-    api_key: str
+    api_key: Optional[str] = Field("", description="API Key if available")
     provider: Optional[str] = Field("Gemini", description="AI Provider: Google Gemini")
     model: str = "gemini-3.8-flash"
 
@@ -218,10 +218,8 @@ def generate_blueprint(req: BlueprintRequest):
 
 @app.post("/api/generate-question")
 def generate_draft_question(req: QuestionGenerateRequest):
-    if not req.api_key:
-        raise HTTPException(status_code=400, detail="API Key is required for question generation.")
     try:
-        draft = core.generate_gap_question(req.competency, req.jd_text, req.difficulty, req.api_key, req.model, provider=req.provider or "Gemini")
+        draft = core.generate_gap_question(req.competency, req.jd_text, req.difficulty, req.api_key or "", req.model, provider=req.provider or "Gemini")
         return draft
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Draft generation failed: {str(e)}")

@@ -125,12 +125,14 @@ st.set_page_config(
     page_title=APP_TITLE,
     page_icon="🎯",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
 
 # Custom Styling
 st.markdown("""
 <style>
+    [data-testid="stSidebar"] { display: none !important; }
+    [data-testid="collapsedControl"] { display: none !important; }
     .main-header { font-size: 2.1rem; font-weight: 800; color: #1e293b; margin-bottom: 0.2rem; }
     .sub-caption { font-size: 1.0rem; color: #64748b; margin-bottom: 0.8rem; }
     .api-badge-ok { background-color: #dcfce7; color: #166534; padding: 4px 12px; border-radius: 12px; font-weight: 600; font-size: 0.85rem; border: 1px solid #86efac; display: inline-block; margin-bottom: 12px; }
@@ -139,68 +141,15 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# Sidebar Configuration & Controls
+# AI & Engine Configuration (Auto-detected with seamless local fallback)
 # ---------------------------------------------------------
-with st.sidebar:
+provider_choice = "Google Gemini"
+provider_code = "Gemini"
 
-    st.markdown("### 🤖 GenAI Provider: Google Gemini")
-    provider_choice = "Google Gemini"
-    provider_code = "Gemini"
-
-    gemini_env = os.getenv("GEMINI_API_KEY", "") or os.getenv("GOOGLE_API_KEY", "") or os.getenv("OPENAI_API_KEY", "")
-    target_env_key = gemini_env
-    has_env_key = bool(target_env_key and target_env_key.strip())
-
-    ai_toggle = st.toggle("Enable Gemini Agent Mode", value=has_env_key, help="Uses Google Gemini API for structured extraction and scenario question synthesis.")
-    api_key_input = target_env_key
-    model_choice = "gemini-3.8-flash"
-
-    if ai_toggle:
-        if has_env_key:
-            st.caption("🔒 Gemini API Key auto-loaded from environment")
-        api_key_input = st.text_input(
-            "Gemini API Key",
-            value=target_env_key,
-            type="password",
-            help="Your Gemini API key is kept securely only in session memory."
-        )
-        model_choice = st.selectbox(
-            "Gemini Model",
-            ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-1.5-flash", "gemini-1.5-pro"],
-            index=0
-        )
-        
-        # Test API Key Button
-        if st.button("🔑 Test Gemini Connection", use_container_width=True):
-            with st.spinner("Testing Google Gemini connection..."):
-                is_up, _ = get_api_health()
-                if is_up:
-                    try:
-                        r = requests.post(f"{API_BASE_URL}/api/test-key", json={
-                            "api_key": api_key_input, "provider": "Gemini", "model": model_choice
-                        }, timeout=10)
-                        if r.ok:
-                            res = r.json()
-                            is_valid, msg = res["is_valid"], res["message"]
-                        else:
-                            is_valid, msg = core.test_ai_key(api_key_input, "Gemini", model_choice)
-                    except Exception:
-                        is_valid, msg = core.test_ai_key(api_key_input, "Gemini", model_choice)
-                else:
-                    is_valid, msg = core.test_ai_key(api_key_input, "Gemini", model_choice)
-
-                if is_valid:
-                    st.success(f"✅ {msg}")
-                else:
-                    st.error(f"❌ {msg}")
-
-    st.divider()
-    st.markdown("### 🏛️ System Architecture")
-    st.markdown("""
-    - **Frontend**: Streamlit (`port 8501`)
-    - **Backend**: FastAPI (`port 8000`)
-    - **Embeddings**: `all-MiniLM-L6-v2`
-    """)
+gemini_env = os.getenv("GEMINI_API_KEY", "") or os.getenv("GOOGLE_API_KEY", "") or os.getenv("OPENAI_API_KEY", "")
+api_key_input = gemini_env.strip() if gemini_env else ""
+ai_toggle = bool(api_key_input)
+model_choice = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
 
 st.markdown(f'<div class="main-header">🎯 {APP_TITLE}</div>', unsafe_allow_html=True)
 st.markdown('<div class="sub-caption">Enterprise Multi-Agent Assessment Pipeline • Streamlit UI + FastAPI Backend Architecture</div>', unsafe_allow_html=True)
@@ -229,7 +178,7 @@ with c_st3:
     if ai_toggle and (api_key_input and api_key_input.strip()):
         st.markdown(f'<div class="api-badge-ok">🔑 Gemini AI Active ({model_choice})</div>', unsafe_allow_html=True)
     else:
-        st.markdown('<div class="api-badge-warn">🔑 Gemini AI Inactive (Local Rule Engine)</div>', unsafe_allow_html=True)
+        st.markdown('<div class="api-badge-ok">⚡ Local Rule Engine Active</div>', unsafe_allow_html=True)
 
 # Session State Initialization
 if "jd_text" not in st.session_state:
@@ -637,9 +586,8 @@ with tab4:
         with c_gap2:
             gap_diff = st.selectbox("Difficulty Level", ["Easy", "Medium", "Hard"], index=1)
 
-        can_generate = bool(ai_toggle and api_key_input)
-        if st.button("✨ Synthesize Scenario Question with AI", disabled=not can_generate):
-            with st.spinner("Generating work-sample scenario question via FastAPI..."):
+        if st.button("✨ Synthesize Scenario Question", type="primary", use_container_width=True):
+            with st.spinner("Synthesizing scenario question..."):
                 try:
                     new_q = client_generate_question(gap_comp, st.session_state.jd_text, gap_diff, api_key_input, model_choice, provider=provider_code)
                     st.session_state.generated_questions.append(new_q)
@@ -647,9 +595,6 @@ with tab4:
                     st.success("Draft question created. Human review is required before publication.")
                 except Exception as ex:
                     st.error(f"Generation failed: {ex}")
-
-        if not can_generate:
-            st.caption("ℹ️ Enable Gemini Agent Mode and provide a Gemini API Key in the sidebar to generate new scenario questions.")
 
         if st.session_state.generated_questions:
             st.markdown("#### 📝 Pending Draft Questions for Human Review")

@@ -1166,8 +1166,10 @@ def generate_explainability_report(
     }
 
 
-def generate_gap_question(competency: str, jd_text: str, difficulty: str, api_key: str, model: str = "gemini-3.8-flash", provider: str = "Gemini") -> dict:
-    prompt = f"""
+def generate_gap_question(competency: str, jd_text: str, difficulty: str, api_key: str = "", model: str = "gemini-3.8-flash", provider: str = "Gemini") -> dict:
+    if api_key and api_key.strip():
+        try:
+            prompt = f"""
 Create one high-quality, scenario-based or work-sample assessment question for:
 Competency: {competency}
 Target Difficulty: {difficulty}
@@ -1192,10 +1194,45 @@ Return ONLY a valid JSON object matching this schema:
 Job Description:
 {jd_text[:8000]}
 """
-    raw = call_ai_model(prompt, api_key, provider=provider, model=model)
-    data = extract_json_from_llm_response(raw)
-    data["review_status"] = "Draft — human review required"
-    return data
+            raw = call_ai_model(prompt, api_key, provider=provider, model=model)
+            data = extract_json_from_llm_response(raw)
+            data["review_status"] = "Draft — human review required"
+            return data
+        except Exception:
+            pass
+
+    # Seamless Local Engine Fallback
+    matching = [q for q in QUESTION_BANK if q.get("competency") == competency]
+    if matching:
+        base = random.choice(matching)
+        return {
+            "id": f"LOCAL-GEN-{random.randint(100, 999)}",
+            "competency": competency,
+            "subskill": base.get("subskill", "Core Practical Engineering"),
+            "difficulty": difficulty,
+            "cognitive_level": base.get("cognitive_level", "Apply/Analyze"),
+            "job_relevance": "Direct Core Requirement (Local Engine)",
+            "type": "Scenario",
+            "question": f"Practical Scenario ({competency}): {base.get('question')}",
+            "expected": base.get("expected", "Production-grade design, clean exception handling, and verifiable test assertions."),
+            "rubric": base.get("rubric", "Standard 3-tier scoring: 3 pts (optimal), 2 pts (acceptable), 0 pts (unsatisfactory)"),
+            "minutes": base.get("minutes", 8),
+            "review_status": "Draft — generated via local rule engine"
+        }
+    return {
+        "id": f"LOCAL-GEN-{random.randint(100, 999)}",
+        "competency": competency,
+        "subskill": "Practical Implementation",
+        "difficulty": difficulty,
+        "cognitive_level": "Apply/Analyze",
+        "job_relevance": "Direct Core Requirement (Local Engine)",
+        "type": "Scenario",
+        "question": f"Design and implement a robust component for {competency} handling high concurrency, failure recovery, and maintainability.",
+        "expected": f"Demonstrates comprehensive mastery of {competency} architecture, edge-case mitigation, and performance trade-offs.",
+        "rubric": "Grading scale: 3 pts for optimal architecture, 2 for partially correct approach, 0 for flawed design",
+        "minutes": 8,
+        "review_status": "Draft — generated via local rule engine"
+    }
 
 
 def run_candidate_simulation(blueprint: list, duration: int = 60) -> dict | None:
