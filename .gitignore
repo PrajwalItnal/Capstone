@@ -20,3 +20,7 @@ ENV/
 Thumbs.db
 ehthumbs.db
 Desktop.ini
+
+# Vector store cache
+chroma_store/
+*.log

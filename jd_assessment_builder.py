@@ -31,19 +31,19 @@ def get_api_health():
         return False, {}
 
 
-def client_extract_jd(jd_text, use_ai, api_key, model):
+def client_extract_jd(jd_text, use_ai, api_key, model, provider="Gemini"):
     is_up, _ = get_api_health()
     if is_up:
         try:
             r = requests.post(f"{API_BASE_URL}/api/extract-jd", json={
-                "jd_text": jd_text, "use_ai": use_ai, "api_key": api_key, "model": model
+                "jd_text": jd_text, "use_ai": use_ai, "api_key": api_key, "model": model, "provider": provider
             }, timeout=90)
             if r.ok:
-                return r.json(), "FastAPI Backend"
+                return r.json(), f"FastAPI Backend ({provider})"
         except Exception:
             pass
-    res = core.ai_based_extraction(jd_text, api_key, model) if (use_ai and api_key) else core.rule_based_extraction(jd_text)
-    return res, "Local Core Engine"
+    res = core.ai_based_extraction(jd_text, api_key, model, provider=provider) if (use_ai and api_key) else core.rule_based_extraction(jd_text)
+    return res, f"Local Core Engine ({provider})"
 
 
 def client_build_blueprint(competencies, seniority, total_questions, duration, easy_pct, medium_pct, hard_pct):
@@ -63,19 +63,19 @@ def client_build_blueprint(competencies, seniority, total_questions, duration, e
     return b, w, "Local Core Engine"
 
 
-def client_generate_question(competency, jd_text, difficulty, api_key, model):
+def client_generate_question(competency, jd_text, difficulty, api_key, model, provider="Gemini"):
     is_up, _ = get_api_health()
     if is_up:
         try:
             r = requests.post(f"{API_BASE_URL}/api/generate-question", json={
                 "competency": competency, "difficulty": difficulty, "jd_text": jd_text,
-                "api_key": api_key, "model": model
+                "api_key": api_key, "model": model, "provider": provider
             }, timeout=90)
             if r.ok:
                 return r.json()
         except Exception:
             pass
-    return core.generate_gap_question(competency, jd_text, difficulty, api_key, model)
+    return core.generate_gap_question(competency, jd_text, difficulty, api_key, model, provider=provider)
 
 
 def client_simulate_candidates(blueprint, duration):
@@ -129,18 +129,22 @@ st.markdown("""
 st.markdown(f'<div class="main-header">🎯 {APP_TITLE}</div>', unsafe_allow_html=True)
 st.markdown('<div class="sub-caption">Enterprise Multi-Agent Assessment Pipeline • Streamlit UI + FastAPI Backend Architecture</div>', unsafe_allow_html=True)
 
-# Backend status indicator
+# Backend & RAG Engine status indicators
 backend_online, backend_meta = get_api_health()
-if backend_online:
-    st.markdown(
-        f'<div class="api-badge-ok">🟢 FastAPI Backend Connected: <a href="{API_BASE_URL}/docs" target="_blank" style="color: #166534; font-weight:700; text-decoration: underline;">{API_BASE_URL} (OpenAPI Swagger Docs)</a></div>',
-        unsafe_allow_html=True
-    )
-else:
-    st.markdown(
-        '<div class="api-badge-warn">🟡 Running in Standalone Core Mode (FastAPI backend offline)</div>',
-        unsafe_allow_html=True
-    )
+rag_inst = core.init_rag_system()
+rag_status = rag_inst.status() if rag_inst else {}
+
+c_st1, c_st2, c_st3 = st.columns([1.5, 2.2, 4])
+with c_st1:
+    if backend_online:
+        st.markdown('<div class="api-badge-ok">🟢 FastAPI Backend Active</div>', unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="api-badge-warn">🟡 Local Core Engine</div>', unsafe_allow_html=True)
+with c_st2:
+    if rag_status.get("faiss") and rag_status.get("chromadb"):
+        st.markdown('<div class="api-badge-ok">🧠 RAG Engine Active (FAISS + Chroma)</div>', unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="api-badge-warn">⚪ Keyword Matcher Active</div>', unsafe_allow_html=True)
 
 # Session State Initialization
 if "jd_text" not in st.session_state:
@@ -171,41 +175,75 @@ def log_audit(event):
 with st.sidebar:
     st.header("⚙️ Settings & Agent Controls")
     
-    env_key = os.getenv("OPENAI_API_KEY", "")
-    has_env_key = bool(env_key and env_key.strip() and env_key != "your_openai_api_key_here")
+    provider_choice = st.selectbox("AI Provider", ["Google Gemini", "OpenAI"], index=0)
+    provider_code = "Gemini" if provider_choice == "Google Gemini" else "OpenAI"
+
+    gemini_env = os.getenv("GEMINI_API_KEY", "") or (os.getenv("OPENAI_API_KEY", "") if os.getenv("OPENAI_API_KEY", "").startswith(("AQ.", "AIza")) else "")
+    openai_env = os.getenv("OPENAI_API_KEY", "") if not os.getenv("OPENAI_API_KEY", "").startswith(("AQ.", "AIza")) else ""
     
-    ai_toggle = st.toggle("Enable AI Agent Mode", value=has_env_key, help="Uses OpenAI for deep extraction and gap question synthesis.")
+    target_env_key = gemini_env if provider_code == "Gemini" else openai_env
+    has_env_key = bool(target_env_key and target_env_key.strip() and target_env_key != "your_openai_api_key_here")
+    
+    ai_toggle = st.toggle("Enable AI Agent Mode", value=has_env_key, help="Uses Google Gemini or OpenAI for structured extraction and scenario question synthesis.")
     api_key_input = ""
-    model_choice = "gpt-4o-mini"
+    model_choice = "gemini-1.5-flash" if provider_code == "Gemini" else "gpt-4o-mini"
     
     if ai_toggle:
         if has_env_key:
-            st.caption("🔒 Key auto-loaded from `.env`")
+            st.caption(f"🔒 {provider_choice} Key auto-loaded from `.env`")
         api_key_input = st.text_input(
-            "OpenAI API Key",
-            value=env_key if env_key != "your_openai_api_key_here" else "",
+            f"{provider_choice} API Key",
+            value=target_env_key if target_env_key != "your_openai_api_key_here" else "",
             type="password",
             help="Your key is kept only in session memory."
         )
-        model_choice = st.selectbox("OpenAI Model", ["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"], index=0)
+        if provider_code == "Gemini":
+            model_choice = st.selectbox("Gemini Model", ["gemini-1.5-flash", "gemini-2.5-flash", "gemini-1.5-pro"], index=0)
+        else:
+            model_choice = st.selectbox("OpenAI Model", ["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"], index=0)
         
         # Test API Key Button
-        if st.button("🔑 Test API Key Connection", use_container_width=True):
-            with st.spinner("Testing OpenAI connection..."):
-                is_valid, msg = core.test_openai_api_key(api_key_input, model_choice)
+        if st.button(f"🔑 Test {provider_choice} Connection", use_container_width=True):
+            with st.spinner(f"Testing {provider_choice} connection..."):
+                is_up, _ = get_api_health()
+                if is_up:
+                    try:
+                        r = requests.post(f"{API_BASE_URL}/api/test-key", json={
+                            "api_key": api_key_input, "provider": provider_code, "model": model_choice
+                        }, timeout=10)
+                        if r.ok:
+                            res = r.json()
+                            is_valid, msg = res["is_valid"], res["message"]
+                        else:
+                            is_valid, msg = core.test_ai_key(api_key_input, provider_code, model_choice)
+                    except Exception:
+                        is_valid, msg = core.test_ai_key(api_key_input, provider_code, model_choice)
+                else:
+                    is_valid, msg = core.test_ai_key(api_key_input, provider_code, model_choice)
+                
                 if is_valid:
                     st.success(f"✅ {msg}")
-                    log_audit(f"OpenAI API Key test succeeded with model {model_choice}.")
+                    log_audit(f"{provider_choice} API Key test succeeded with model {model_choice}.")
                 else:
                     st.error(f"❌ {msg}")
-                    log_audit(f"OpenAI API Key test failed: {msg}")
+                    log_audit(f"{provider_choice} API Key test failed: {msg}")
 
     st.divider()
+    st.markdown("### 🧠 Vector & RAG Engine")
+    if rag_status and rag_status.get("faiss"):
+        st.markdown(f"""
+        - **Embedding Model**: `{rag_status.get('model', 'all-MiniLM-L6-v2')}`
+        - **FAISS Vector Index**: `{rag_status.get('questions_indexed_faiss', 0)}` questions
+        - **ChromaDB Vector Store**: `{rag_status.get('questions_in_chromadb', 0)}` records
+        - **Taxonomy Embeddings**: `{rag_status.get('taxonomy_indexed_faiss', 0)}` competencies
+        """)
+    else:
+        st.caption("RAG vector engine in fallback keyword mode.")
+
     st.markdown("### 🏛️ System Architecture")
-    st.markdown(f"""
+    st.markdown("""
     - **Frontend**: Streamlit (`port 8501`)
-    - **Backend**: FastAPI (`{API_BASE_URL}`)
-    - **API Docs**: [Swagger UI]({API_BASE_URL}/docs)
+    - **Backend**: FastAPI (`port 8000`)
     """)
     st.markdown("### 🤖 5 Orchestrated Agent Roles")
     st.markdown("""
@@ -281,7 +319,7 @@ with tab1:
         else:
             with st.spinner("Analyzing Job Description via FastAPI Agent..."):
                 try:
-                    analysis, engine_name = client_extract_jd(jd_editor, ai_toggle, api_key_input, model_choice)
+                    analysis, engine_name = client_extract_jd(jd_editor, ai_toggle, api_key_input, model_choice, provider=provider_code)
                     log_audit(f"Executed JD extraction via {engine_name}.")
                     st.session_state.analysis = analysis
                     st.session_state.competencies = analysis.get("competencies", [])
@@ -353,6 +391,37 @@ with tab2:
         if st.button("💾 Confirm Competency Mapping"):
             log_audit("Reviewer confirmed competency taxonomy mapping.")
             st.success("Competency mapping confirmed. Proceed to Tab 3 to configure the blueprint.")
+
+        # Innovative Workflow #6: Human-in-the-Loop Feedback Loop
+        st.divider()
+        st.markdown("#### 🔄 Innovative Workflow 6: Human-in-the-Loop Feedback Loop")
+        st.caption("Store expert corrections to fine-tune competency taxonomy mapping and future extractions.")
+        c_fb1, c_fb2, c_fb3 = st.columns([1.5, 1.5, 2])
+        comp_options = [c.get("competency", "") for c in st.session_state.competencies if c.get("competency")]
+        with c_fb1:
+            fb_target = st.selectbox("Select Extracted Skill", comp_options, key="fb_target_comp") if comp_options else None
+        with c_fb2:
+            all_taxonomy_names = list(core.TAXONOMY.keys())
+            fb_correct = st.selectbox("Map to Canonical Competency", all_taxonomy_names, key="fb_correct_comp")
+        with c_fb3:
+            fb_notes = st.text_input("Reviewer Notes / Rationale", placeholder="e.g. Map FastAPI to Python Core & Frameworks", key="fb_notes_comp")
+
+        if st.button("📤 Submit Correction to Feedback Loop", disabled=not fb_target):
+            core.save_reviewer_feedback({
+                "item_type": "competency_tag",
+                "target_id": fb_target,
+                "original_value": fb_target,
+                "corrected_value": fb_correct,
+                "notes": fb_notes,
+                "reviewer": "Lead Assessment Architect"
+            })
+            for c in st.session_state.competencies:
+                if c.get("competency") == fb_target:
+                    c["competency"] = fb_correct
+                    c["reviewer_corrected"] = True
+            log_audit(f"Reviewer submitted feedback correction: '{fb_target}' -> '{fb_correct}'.")
+            st.success(f"Feedback stored! '{fb_target}' normalized to '{fb_correct}' in feedback loop.")
+            st.rerun()
 
 
 # ---------------------------------------------------------
@@ -428,13 +497,49 @@ with tab3:
             
             st.dataframe(preview_rows, use_container_width=True, hide_index=True)
 
-            if st.session_state.warnings:
-                for w in st.session_state.warnings:
-                    st.warning(f"⚠️ {w}")
+            # AI Explainability & Bias Guardrail Audit Report
+            st.divider()
+            st.markdown("### 🛡️ AI Explainability & Bias Guardrail Audit Report")
+            exp_report = core.generate_explainability_report(
+                jd_text=st.session_state.jd_text,
+                competencies=st.session_state.competencies,
+                blueprint=st.session_state.blueprint,
+                seniority=selected_seniority,
+                duration=int(target_duration),
+            )
+            
+            c_f1, c_f2, c_f3, c_f4 = st.columns(4)
+            with c_f1:
+                st.metric("Fairness Score", f"{exp_report['fairness_score']}%", delta="Passed" if exp_report['is_fairness_passed'] else "Warning")
+            with c_f2:
+                st.metric("Target Seniority", exp_report["seniority"])
+            with c_f3:
+                st.metric("Total Items", f"{exp_report['total_questions']} questions")
+            with c_f4:
+                st.metric("Total Time", f"{exp_report['total_minutes']} mins")
+
+            with st.expander("📌 Seniority & Difficulty Allocation Rationale", expanded=True):
+                st.markdown(f"**Target Role:** `{exp_report['seniority']}`")
+                st.markdown(f"**Adaptive Rationale:** {exp_report['seniority_rationale']}")
+                st.markdown(f"**Difficulty Mix:** Easy: `{exp_report['difficulty_mix']['Easy']}%` | Medium: `{exp_report['difficulty_mix']['Medium']}%` | Hard: `{exp_report['difficulty_mix']['Hard']}%`")
+
+            with st.expander("🏷️ Competency Weighting & JD Evidence Rationale"):
+                for cr in exp_report["competency_rationales"]:
+                    st.markdown(f"**{cr['competency']}** (`{cr['category']}` • `{cr['weight_pct']}%` Weight)")
+                    st.caption(cr["rationale"])
+
+            with st.expander("⚖️ Bias & Fairness Guardrail Scan"):
+                if exp_report["bias_guardrails"]:
+                    for bg in exp_report["bias_guardrails"]:
+                        st.error(f"**[{bg['severity']} Severity] {bg['category']}**: {bg['issue']}")
+                        st.info(f"💡 Recommendation: {bg['recommendation']}")
+                else:
+                    st.success("✅ Clean Scan: No exclusionary terminology, age-restrictive phrasing, or degree inflation detected in the job description.")
 
             export_data = {
                 "role": selected_seniority,
                 "duration_minutes": target_duration,
+                "explainability_report": exp_report,
                 "blueprint": st.session_state.blueprint,
                 "warnings": st.session_state.warnings,
             }
@@ -492,7 +597,7 @@ with tab4:
         if st.button("✨ Synthesize Scenario Question with AI", disabled=not can_generate):
             with st.spinner("Generating work-sample scenario question via FastAPI..."):
                 try:
-                    new_q = client_generate_question(gap_comp, st.session_state.jd_text, gap_diff, api_key_input, model_choice)
+                    new_q = client_generate_question(gap_comp, st.session_state.jd_text, gap_diff, api_key_input, model_choice, provider=provider_code)
                     st.session_state.generated_questions.append(new_q)
                     log_audit(f"Generated new draft question for {gap_comp} ({gap_diff}).")
                     st.success("Draft question created. Human review is required before publication.")
@@ -520,6 +625,38 @@ with tab4:
                             gq["review_status"] = "Approved by Reviewer"
                             log_audit(f"Approved draft question #{idx+1} for {gq['competency']}.")
                             st.rerun()
+
+        # Innovative Workflow #4: Semantic Tagging & QA Audit Tool
+        st.divider()
+        st.markdown("### 🔬 Innovative Workflow 4: RAG Semantic Tagging & QA Audit Tool")
+        st.caption("Audit assigned questions against the 15-competency vector taxonomy using embeddings to verify classification accuracy and detect wrong tags.")
+        
+        all_assigned = [q for b in st.session_state.blueprint for q in b["selected_questions"]]
+        if all_assigned:
+            q_map = {f"[{q.get('id', 'Q')}] {q['competency']} ({q.get('difficulty')}): {q['question'][:70]}...": q for q in all_assigned}
+            chosen_q_key = st.selectbox("Select Question to Audit with Vector Taxonomy", list(q_map.keys()))
+            target_q = q_map[chosen_q_key]
+
+            if st.button("🧪 Run RAG Vector Tag Audit", type="secondary"):
+                rag_engine = core.init_rag_system()
+                if rag_engine:
+                    audit_res = rag_engine.detect_wrong_tags(target_q["question"], target_q["competency"])
+                    tag_recs = rag_engine.recommend_tags(target_q["question"], top_k=3)
+                    
+                    c_aud1, c_aud2 = st.columns(2)
+                    with c_aud1:
+                        st.markdown("**Assigned Competency Tag:**")
+                        st.info(f"🏷️ `{target_q['competency']}`")
+                        if audit_res.get("is_wrong"):
+                            st.warning(f"⚠️ Tag Mismatch Detected! Recommended: `{audit_res.get('suggested_competency')}` (Confidence: {int(audit_res.get('confidence', 0)*100)}%)")
+                        else:
+                            st.success("✅ Tag Validated: Question content closely matches assigned canonical competency.")
+                    with c_aud2:
+                        st.markdown("**Top Recommended Vector Taxonomy Tags:**")
+                        for tr in tag_recs:
+                            st.markdown(f"- **{tr['competency']}** (`{tr['category']}`): `{int(tr['confidence']*100)}% Match`")
+                else:
+                    st.info("RAG engine is operating in fallback mode.")
 
 
 # ---------------------------------------------------------
@@ -606,6 +743,13 @@ with tab5:
                 st.dataframe(pd.DataFrame(st.session_state.audit_logs), use_container_width=True, hide_index=True)
             else:
                 st.write("No audit events recorded yet.")
+
+        with st.expander("🔄 View Human-in-the-Loop Reviewer Feedback History"):
+            fb_records = core.load_reviewer_feedback()
+            if fb_records:
+                st.dataframe(pd.DataFrame(fb_records), use_container_width=True, hide_index=True)
+            else:
+                st.write("No reviewer corrections saved yet. Use Tab 2 to submit feedback corrections.")
 
         # Final Assessment Export
         full_assessment_export = {

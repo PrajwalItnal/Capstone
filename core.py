@@ -26,9 +26,19 @@ try:
 except ImportError:
     Document = None
 
+try:
+    from rag_engine import get_rag_engine, RAGEngine
+    RAG_AVAILABLE = True
+except ImportError:
+    RAG_AVAILABLE = False
+    def get_rag_engine():
+        return None
 
-def load_env_file():
-    """Loads key-value pairs from .env in workspace root if present."""
+
+def load_env_file(force=True):
+    """Loads key-value pairs from .env in workspace root if present.
+    When force=True, always overwrites existing env vars with values from .env.
+    """
     env_path = os.path.join(os.path.dirname(__file__), ".env")
     if os.path.exists(env_path):
         try:
@@ -39,10 +49,18 @@ def load_env_file():
                         k, v = line.split("=", 1)
                         k = k.strip()
                         v = v.strip().strip("'\"")
-                        if k and (k not in os.environ or not os.environ[k]):
-                            os.environ[k] = v
+                        if k and v:
+                            os.environ[k] = v  # Always overwrite
         except Exception:
             pass
+
+    # Auto-detect if key is Gemini format
+    gemini_key = os.environ.get("GEMINI_API_KEY", "")
+    open_key = os.environ.get("OPENAI_API_KEY", "")
+    if not gemini_key and open_key and (open_key.startswith("AQ.") or open_key.startswith("AIza")):
+        os.environ["GEMINI_API_KEY"] = open_key
+    if not open_key and gemini_key:
+        os.environ["OPENAI_API_KEY"] = gemini_key
 
 load_env_file()
 
@@ -388,6 +406,80 @@ QUESTION_BANK = [
     },
 ]
 
+# ─── RAG System Initialization & Singleton ─────────────────────────────────────
+_rag_initialized = False
+
+def init_rag_system():
+    """Initializes and populates RAG FAISS + ChromaDB vector indexes with taxonomy and question bank."""
+    global _rag_initialized
+    if not RAG_AVAILABLE:
+        return None
+    try:
+        rag = get_rag_engine()
+        if not getattr(rag, "_indexed", False):
+            rag.index_taxonomy(TAXONOMY)
+            rag.index_question_bank(QUESTION_BANK)
+            _rag_initialized = True
+        return rag
+    except Exception as e:
+        print(f"[RAG] init_rag_system notice: {e}")
+        return None
+
+
+# ─── Human Reviewer Feedback Loop Store ───────────────────────────────────────
+FEEDBACK_FILE = os.path.join(os.path.dirname(__file__), "reviewer_feedback.json")
+
+def load_reviewer_feedback() -> list:
+    """Loads all human feedback and audit corrections."""
+    if os.path.exists(FEEDBACK_FILE):
+        try:
+            with open(FEEDBACK_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return []
+    return []
+
+def save_reviewer_feedback(entry: dict) -> list:
+    """
+    Saves a reviewer correction, tag update, or blueprint adjustment.
+    entry format: {
+        'timestamp': ..., 'item_type': ..., 'target_id': ...,
+        'original_value': ..., 'corrected_value': ..., 'notes': ..., 'reviewer': ...
+    }
+    """
+    history = load_reviewer_feedback()
+    entry["timestamp"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    history.append(entry)
+    try:
+        with open(FEEDBACK_FILE, "w", encoding="utf-8") as f:
+            json.dump(history, f, indent=2)
+    except Exception as e:
+        print(f"[Feedback] Save error: {e}")
+    return history
+
+
+def apply_feedback_to_competencies(competencies: list) -> list:
+    """Applies reviewer feedback corrections to freshly extracted competencies."""
+    feedback = load_reviewer_feedback()
+    comp_overrides = {}
+    for fb in feedback:
+        if fb.get("item_type") == "competency_tag" and fb.get("target_id"):
+            comp_overrides[fb["target_id"].lower()] = fb.get("corrected_value")
+
+    if not comp_overrides:
+        return competencies
+
+    updated = []
+    for c in competencies:
+        orig_name = c.get("competency", "")
+        if orig_name.lower() in comp_overrides:
+            new_name = comp_overrides[orig_name.lower()]
+            c["competency"] = new_name
+            c["reviewer_corrected"] = True
+            c["original_competency"] = orig_name
+        updated.append(c)
+    return updated
+
 
 def extract_text_from_bytes(filename: str, raw_bytes: bytes) -> str:
     """Extracts raw text from uploaded TXT, PDF, or DOCX bytes."""
@@ -502,14 +594,96 @@ def rule_based_extraction(jd_text: str) -> dict:
     }
 
 
+def test_gemini_api_key(api_key: str, model: str = "gemini-1.5-flash") -> tuple[bool, str]:
+    """Validates Google Gemini API key."""
+    if not api_key or not api_key.strip():
+        return False, "Gemini API key is empty."
+    if requests is None:
+        return False, "The 'requests' module is missing."
+
+    key = api_key.strip()
+    try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models?key={key}"
+        resp = requests.get(url, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            models = [m.get("name", "") for m in data.get("models", [])]
+            return True, f"Authentication succeeded! Connected to Google Gemini API ({len(models)} models available)."
+        elif resp.status_code == 403:
+            err_data = {}
+            try:
+                err_data = resp.json().get("error", {})
+            except Exception:
+                pass
+            msg = err_data.get("message", "Permission denied / 403 Forbidden")
+            if "suspended" in msg.lower():
+                return False, f"403 Forbidden: Google Cloud Consumer project is suspended ({msg}). Visit https://aistudio.google.com/app/apikey to un-suspend or generate a new key."
+            return False, f"403 Forbidden: {msg}"
+        elif resp.status_code == 400:
+            return False, "400 Bad Request: Invalid API key format."
+        else:
+            return False, f"Gemini API returned HTTP {resp.status_code}: {resp.text[:200]}"
+    except Exception as exc:
+        return False, f"Gemini connection failed: {str(exc)}"
+
+
+def call_gemini_api(prompt: str, api_key: str, model: str = "gemini-1.5-flash", system_role: str = None) -> str:
+    """Calls Google Gemini API using standard REST generateContent endpoint."""
+    if requests is None:
+        raise RuntimeError("Install requests: pip install requests")
+
+    key = api_key.strip()
+    # Normalize model name
+    clean_model = model.replace("models/", "")
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{clean_model}:generateContent?key={key}"
+
+    payload = {
+        "contents": [
+            {
+                "parts": [{"text": prompt}]
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.2,
+            "responseMimeType": "application/json"
+        }
+    }
+    if system_role:
+        payload["systemInstruction"] = {
+            "parts": [{"text": system_role}]
+        }
+
+    resp = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=90)
+    if not resp.ok:
+        err_msg = resp.text[:400]
+        try:
+            err_msg = resp.json().get("error", {}).get("message", err_msg)
+        except Exception:
+            pass
+        raise RuntimeError(f"Google Gemini API Error {resp.status_code}: {err_msg}")
+
+    data = resp.json()
+    try:
+        candidate = data["candidates"][0]
+        text = candidate["content"]["parts"][0]["text"]
+        return text
+    except (KeyError, IndexError) as e:
+        raise RuntimeError(f"Unexpected response format from Gemini: {data}")
+
+
 def test_openai_api_key(api_key: str, model: str = "gpt-4o-mini") -> tuple[bool, str]:
+    """Validates OpenAI API key (auto-detects Gemini keys if supplied)."""
     if not api_key or not api_key.strip():
         return False, "API key is empty."
     if requests is None:
         return False, "The 'requests' module is missing."
 
+    clean_key = api_key.strip()
+    if clean_key.startswith("AQ.") or clean_key.startswith("AIza"):
+        return test_gemini_api_key(clean_key, model=model if "gemini" in model else "gemini-1.5-flash")
+
     headers = {
-        "Authorization": f"Bearer {api_key.strip()}",
+        "Authorization": f"Bearer {clean_key}",
         "Content-Type": "application/json",
     }
     try:
@@ -527,11 +701,16 @@ def test_openai_api_key(api_key: str, model: str = "gpt-4o-mini") -> tuple[bool,
 
 
 def call_openai_chat(prompt: str, api_key: str, model: str = "gpt-4o-mini", system_role: str = "You are an expert technical recruiter and assessment architect.") -> str:
+    """Calls OpenAI Chat Completions API (auto-detects Gemini keys if supplied)."""
     if requests is None:
         raise RuntimeError("Install requests: pip install requests")
 
+    clean_key = api_key.strip() if api_key else ""
+    if clean_key.startswith("AQ.") or clean_key.startswith("AIza"):
+        return call_gemini_api(prompt, clean_key, model=model if "gemini" in model else "gemini-1.5-flash", system_role=system_role)
+
     headers = {
-        "Authorization": f"Bearer {api_key.strip()}",
+        "Authorization": f"Bearer {clean_key}",
         "Content-Type": "application/json",
     }
     payload = {
@@ -556,7 +735,25 @@ def call_openai_chat(prompt: str, api_key: str, model: str = "gpt-4o-mini", syst
     return data["choices"][0]["message"]["content"]
 
 
-def ai_based_extraction(jd_text: str, api_key: str, model: str) -> dict:
+def call_ai_model(prompt: str, api_key: str, provider: str = "Gemini", model: str = "gemini-1.5-flash", system_role: str = "You are an expert technical recruiter and assessment architect.") -> str:
+    """Unified router for Gemini and OpenAI models."""
+    prov = (provider or "Gemini").lower()
+    if "gemini" in prov or "google" in prov or api_key.startswith("AQ.") or api_key.startswith("AIza"):
+        return call_gemini_api(prompt, api_key, model=model or "gemini-1.5-flash", system_role=system_role)
+    else:
+        return call_openai_chat(prompt, api_key, model=model or "gpt-4o-mini", system_role=system_role)
+
+
+def test_ai_key(api_key: str, provider: str = "Gemini", model: str = "gemini-1.5-flash") -> tuple[bool, str]:
+    """Unified key tester for Gemini and OpenAI."""
+    prov = (provider or "Gemini").lower()
+    if "gemini" in prov or "google" in prov or api_key.startswith("AQ.") or api_key.startswith("AIza"):
+        return test_gemini_api_key(api_key, model)
+    else:
+        return test_openai_api_key(api_key, model)
+
+
+def ai_based_extraction(jd_text: str, api_key: str, model: str = "gemini-1.5-flash", provider: str = "Gemini") -> dict:
     prompt = f"""
 Analyze this Job Description and return ONLY valid JSON matching this schema:
 {{
@@ -582,7 +779,7 @@ Analyze this Job Description and return ONLY valid JSON matching this schema:
 Job Description:
 {jd_text[:14000]}
 """
-    raw_response = call_openai_chat(prompt, api_key, model)
+    raw_response = call_ai_model(prompt, api_key, provider=provider, model=model)
     cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw_response.strip(), flags=re.I)
     parsed = json.loads(cleaned)
 
@@ -662,9 +859,36 @@ def build_adaptive_blueprint(competencies: list, seniority: str, total_questions
     warnings = []
     used_questions = []
 
+    rag = init_rag_system()
+
     for comp, allocated_count in zip(competencies, counts):
         comp_name = comp["competency"]
-        candidates = [q for q in QUESTION_BANK if q["competency"] == comp_name]
+        evidence_text = " ".join(comp.get("evidence", []))
+        query_text = f"{comp_name} {evidence_text}".strip()
+
+        # Retrieve semantically via RAG if available
+        candidates = []
+        if rag:
+            try:
+                rag_matches = rag.retrieve_questions(
+                    query=query_text,
+                    competency=comp_name,
+                    top_k=max(10, allocated_count * 3),
+                    min_score=0.15,
+                )
+                if rag_matches:
+                    candidates = rag_matches
+            except Exception as e:
+                print(f"[RAG] Blueprint retrieval fallback: {e}")
+
+        # Fallback to local QUESTION_BANK if candidates empty or insufficient
+        if not candidates:
+            candidates = [q for q in QUESTION_BANK if q["competency"] == comp_name]
+        else:
+            cand_ids = {c.get("id") for c in candidates}
+            for q in QUESTION_BANK:
+                if q["competency"] == comp_name and q["id"] not in cand_ids:
+                    candidates.append(q)
 
         desired_difficulties = []
         for diff_name, pct in [("Easy", easy_pct), ("Medium", medium_pct), ("Hard", hard_pct)]:
@@ -717,7 +941,118 @@ def build_adaptive_blueprint(competencies: list, seniority: str, total_questions
     return blueprint, warnings
 
 
-def generate_gap_question(competency: str, jd_text: str, difficulty: str, api_key: str, model: str = "gpt-4o-mini") -> dict:
+def generate_explainability_report(
+    jd_text: str,
+    competencies: list,
+    blueprint: list,
+    seniority: str,
+    duration: int,
+    difficulty_mix: dict = None,
+) -> dict:
+    """
+    Generates a comprehensive AI Explainability & Bias Audit report as required by
+    the TCS Capstone specification.
+    Includes:
+    - Competency selection rationale (JD evidence citations & weights)
+    - Seniority-to-Difficulty alignment rationale
+    - Question cognitive level distribution (Bloom's Taxonomy)
+    - Time budgeting and coverage gap audit
+    - Bias & Fairness Guardrail Scan (exclusionary language, degree inflation, ageism)
+    """
+    if difficulty_mix is None:
+        difficulty_mix = get_adaptive_difficulty_mix(seniority)
+
+    # 1. Competency rationale breakdown
+    competency_rationales = []
+    total_weight = sum(c.get("calculated_weight", 1) for c in competencies) or 1
+    for c in competencies:
+        name = c.get("competency", "")
+        evidence = c.get("evidence", [])
+        evidence_snippet = f'"{evidence[0]}"' if evidence else "Inferred from role responsibilities"
+        mandatory_str = "Mandatory Core Requirement" if c.get("mandatory") else "Preferred / Secondary"
+        competency_rationales.append({
+            "competency": name,
+            "category": c.get("category", "Technical"),
+            "weight_pct": c.get("weight_pct", round(c.get("calculated_weight", 1) * 100 / total_weight, 1)),
+            "mandatory": c.get("mandatory", False),
+            "rationale": f"Classified as {mandatory_str} with confidence {int(c.get('confidence', 0.8)*100)}%. Evidence cited from JD: {evidence_snippet}.",
+            "evidence": evidence,
+        })
+
+    # 2. Seniority & Difficulty alignment rationale
+    diff_reasoning = {
+        "Junior": "Weight focused on Easy (50%) and Medium (40%) to rigorously test syntax, fundamental data structures, and core concepts without penalizing lack of large-scale architecture experience.",
+        "Mid": "Balanced profile weighted towards Medium (55%) and Hard (20%) to test independent problem solving, debugging, and production-readiness.",
+        "Senior": "Skewed toward Hard (45%) and Medium (45%) to evaluate distributed system design, edge cases, scalability, and code maintainability.",
+        "Lead": "Heavy emphasis on Hard (45%) and architectural scenarios, evaluating leadership, technical strategy, and architectural trade-offs.",
+    }.get(seniority, "Standard balanced distribution testing breadth and depth across skill tiers.")
+
+    # 3. Questions cognitive distribution
+    cognitive_counts = Counter()
+    total_q_count = 0
+    total_minutes = 0
+    rag_matched_count = 0
+    for comp_group in blueprint:
+        for q in comp_group.get("selected_questions", []):
+            total_q_count += 1
+            cognitive_counts[q.get("cognitive_level", "Apply/Analyze")] += 1
+            total_minutes += q.get("minutes", 5)
+            if "_score" in q:
+                rag_matched_count += 1
+
+    # 4. Bias & Fairness Guardrails
+    bias_flags = []
+    norm_jd = jd_text.lower() if jd_text else ""
+    
+    # Check exclusionary / gendered buzzwords
+    buzzwords = ["rockstar", "ninja", "guru", "wizard", "work hard play hard", "he/him", "manpower", "guys"]
+    found_buzzwords = [w for w in buzzwords if re.search(r"\b" + re.escape(w) + r"\b", norm_jd)]
+    if found_buzzwords:
+        bias_flags.append({
+            "category": "Gender & Culture Inclusivity",
+            "severity": "Medium",
+            "issue": f"Exclusionary or non-inclusive terminology detected: {', '.join(found_buzzwords)}.",
+            "recommendation": "Replace hyper-masculine jargon with inclusive performance-based phrasing (e.g. 'Skilled Engineer', 'Collaborative Problem Solver')."
+        })
+
+    # Check degree inflation
+    if re.search(r"\b(tier-1|tier 1|ivy league|iit|nit|top university|premier institute)\b", norm_jd):
+        bias_flags.append({
+            "category": "Credential Inflation / Socioeconomic Bias",
+            "severity": "High",
+            "issue": "Specific institutional pedigree requirements detected.",
+            "recommendation": "Remove university tier filters. Focus exclusively on demonstrated competency and technical skill mastery."
+        })
+
+    # Check ageist / experience caps
+    if re.search(r"\b(recent graduate only|maximum \d+ years|young and dynamic|fresh blood)\b", norm_jd):
+        bias_flags.append({
+            "category": "Age Diversity Guardrail",
+            "severity": "High",
+            "issue": "Potentially age-restrictive phrasing detected.",
+            "recommendation": "Frame requirements around competency milestones rather than strict age or maximum tenure thresholds."
+        })
+
+    fairness_score = max(50, 100 - (len(bias_flags) * 20))
+
+    return {
+        "seniority": seniority,
+        "seniority_rationale": diff_reasoning,
+        "difficulty_mix": difficulty_mix,
+        "competency_rationales": competency_rationales,
+        "cognitive_distribution": dict(cognitive_counts),
+        "total_questions": total_q_count,
+        "total_minutes": total_minutes,
+        "target_duration": duration,
+        "rag_semantic_matches": rag_matched_count,
+        "fairness_score": fairness_score,
+        "bias_guardrails": bias_flags,
+        "is_fairness_passed": len(bias_flags) == 0,
+        "summary": f"Assessment for {seniority} level: {total_q_count} questions ({total_minutes}m) mapped across {len(competencies)} competencies. Fairness Index: {fairness_score}%."
+    }
+
+
+def generate_gap_question(competency: str, jd_text: str, difficulty: str, api_key: str, model: str = "gemini-1.5-flash", provider: str = "Gemini") -> dict:
     prompt = f"""
 Create one high-quality, scenario-based or work-sample assessment question for:
 Competency: {competency}
@@ -743,7 +1078,7 @@ Return ONLY a valid JSON object matching this schema:
 Job Description:
 {jd_text[:8000]}
 """
-    raw = call_openai_chat(prompt, api_key, model)
+    raw = call_ai_model(prompt, api_key, provider=provider, model=model)
     cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw.strip(), flags=re.I)
     data = json.loads(cleaned)
     data["review_status"] = "Draft — human review required"

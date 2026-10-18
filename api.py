@@ -15,6 +15,9 @@ app = FastAPI(
     title="AI Assessment Blueprint Builder API",
     description="Multi-Agent GenAI REST API for Job Description Analysis, Adaptive Blueprint Generation, Question Retrieval, and Candidate Simulation.",
     version="1.0.0",
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
 )
 
 # Enable CORS for frontend clients (e.g., Streamlit, React, Gradio)
@@ -31,8 +34,9 @@ app.add_middleware(
 # Request / Response Schemas
 # ---------------------------------------------------------
 class TestKeyRequest(BaseModel):
-    api_key: str = Field(..., description="OpenAI API Key to validate")
-    model: str = Field("gpt-4o-mini", description="Target model name")
+    api_key: str = Field(..., description="API Key to validate")
+    provider: str = Field("Gemini", description="AI Provider: Gemini or OpenAI")
+    model: str = Field("gemini-1.5-flash", description="Target model name")
 
 
 class TestKeyResponse(BaseModel):
@@ -42,9 +46,10 @@ class TestKeyResponse(BaseModel):
 
 class JDExtractRequest(BaseModel):
     jd_text: str = Field(..., description="Raw text of the job description")
-    use_ai: bool = Field(False, description="Whether to invoke OpenAI or local rule-based extractor")
-    api_key: Optional[str] = Field(None, description="OpenAI API Key if use_ai is True")
-    model: Optional[str] = Field("gpt-4o-mini", description="Model identifier")
+    use_ai: bool = Field(False, description="Whether to invoke AI or local rule-based extractor")
+    api_key: Optional[str] = Field(None, description="API Key if use_ai is True")
+    provider: Optional[str] = Field("Gemini", description="AI Provider: Gemini or OpenAI")
+    model: Optional[str] = Field("gemini-1.5-flash", description="Model identifier")
 
 
 class BlueprintRequest(BaseModel):
@@ -62,7 +67,8 @@ class QuestionGenerateRequest(BaseModel):
     difficulty: str = Field("Medium", pattern="^(Easy|Medium|Hard)$")
     jd_text: str
     api_key: str
-    model: str = "gpt-4o-mini"
+    provider: Optional[str] = Field("Gemini", description="AI Provider: Gemini or OpenAI")
+    model: str = "gemini-1.5-flash"
 
 
 class CandidateSimRequest(BaseModel):
@@ -73,6 +79,41 @@ class CandidateSimRequest(BaseModel):
 class HighlightRequest(BaseModel):
     jd_text: str
     competencies: List[Dict[str, Any]]
+
+
+class RAGSearchRequest(BaseModel):
+    query: str
+    competency: Optional[str] = None
+    difficulty: Optional[str] = None
+    top_k: int = 5
+
+
+class TagAuditRequest(BaseModel):
+    question_text: str
+    assigned_competency: str
+
+
+class RecommendTagsRequest(BaseModel):
+    question_text: str
+    top_k: int = 3
+
+
+class ExplainabilityRequest(BaseModel):
+    jd_text: str
+    competencies: List[Dict[str, Any]]
+    blueprint: List[Dict[str, Any]]
+    seniority: str = "Mid"
+    duration: int = 60
+    difficulty_mix: Optional[Dict[str, int]] = None
+
+
+class FeedbackEntryRequest(BaseModel):
+    item_type: str = Field(..., description="competency_tag, question_tag, difficulty, rubric, blueprint")
+    target_id: str
+    original_value: Any
+    corrected_value: Any
+    notes: Optional[str] = ""
+    reviewer: Optional[str] = "Lead Assessment Architect"
 
 
 # ---------------------------------------------------------
@@ -101,7 +142,7 @@ def health_check():
 
 @app.post("/api/test-key", response_model=TestKeyResponse)
 def test_key_endpoint(req: TestKeyRequest):
-    is_valid, msg = core.test_openai_api_key(req.api_key, req.model)
+    is_valid, msg = core.test_ai_key(req.api_key, req.provider, req.model)
     return TestKeyResponse(is_valid=is_valid, message=msg)
 
 
@@ -133,7 +174,7 @@ def extract_job_description(req: JDExtractRequest):
     
     try:
         if req.use_ai and req.api_key:
-            result = core.ai_based_extraction(req.jd_text, req.api_key, req.model or "gpt-4o-mini")
+            result = core.ai_based_extraction(req.jd_text, req.api_key, req.model or "gemini-1.5-flash", provider=req.provider or "Gemini")
         else:
             result = core.rule_based_extraction(req.jd_text)
         return result
@@ -169,9 +210,9 @@ def generate_blueprint(req: BlueprintRequest):
 @app.post("/api/generate-question")
 def generate_draft_question(req: QuestionGenerateRequest):
     if not req.api_key:
-        raise HTTPException(status_code=400, detail="OpenAI API Key is required for question generation.")
+        raise HTTPException(status_code=400, detail="API Key is required for question generation.")
     try:
-        draft = core.generate_gap_question(req.competency, req.jd_text, req.difficulty, req.api_key, req.model)
+        draft = core.generate_gap_question(req.competency, req.jd_text, req.difficulty, req.api_key, req.model, provider=req.provider or "Gemini")
         return draft
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Draft generation failed: {str(e)}")
@@ -189,6 +230,74 @@ def simulate_candidates(req: CandidateSimRequest):
 def highlight_evidence(req: HighlightRequest):
     html = core.highlight_jd_text(req.jd_text, req.competencies)
     return {"highlighted_html": html}
+
+
+# ---------------------------------------------------------
+# RAG, Explainability & Feedback Endpoints
+# ---------------------------------------------------------
+@app.get("/api/rag/status")
+def get_rag_status():
+    rag = core.init_rag_system()
+    if not rag:
+        return {"status": "unavailable", "message": "RAG engine not initialized"}
+    return {"status": "active", **rag.status()}
+
+
+@app.post("/api/rag/search")
+def rag_search_questions(req: RAGSearchRequest):
+    rag = core.init_rag_system()
+    if not rag:
+        raise HTTPException(status_code=503, detail="RAG engine unavailable")
+    results = rag.retrieve_questions(
+        query=req.query,
+        competency=req.competency,
+        difficulty=req.difficulty,
+        top_k=req.top_k,
+    )
+    return {"count": len(results), "results": results}
+
+
+@app.post("/api/rag/recommend-tags")
+def recommend_tags_endpoint(req: RecommendTagsRequest):
+    rag = core.init_rag_system()
+    if not rag:
+        raise HTTPException(status_code=503, detail="RAG engine unavailable")
+    tags = rag.recommend_tags(req.question_text, top_k=req.top_k)
+    return {"question_text": req.question_text, "recommended_tags": tags}
+
+
+@app.post("/api/rag/audit-question")
+def audit_question_tag(req: TagAuditRequest):
+    rag = core.init_rag_system()
+    if not rag:
+        raise HTTPException(status_code=503, detail="RAG engine unavailable")
+    audit = rag.detect_wrong_tags(req.question_text, req.assigned_competency)
+    return audit
+
+
+@app.post("/api/explainability")
+def explainability_report_endpoint(req: ExplainabilityRequest):
+    report = core.generate_explainability_report(
+        jd_text=req.jd_text,
+        competencies=req.competencies,
+        blueprint=req.blueprint,
+        seniority=req.seniority,
+        duration=req.duration,
+        difficulty_mix=req.difficulty_mix,
+    )
+    return report
+
+
+@app.get("/api/feedback")
+def get_feedback_history():
+    history = core.load_reviewer_feedback()
+    return {"count": len(history), "feedback": history}
+
+
+@app.post("/api/feedback")
+def submit_feedback(req: FeedbackEntryRequest):
+    updated = core.save_reviewer_feedback(req.dict())
+    return {"status": "success", "message": "Feedback recorded", "total_records": len(updated)}
 
 
 if __name__ == "__main__":
