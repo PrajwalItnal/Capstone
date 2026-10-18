@@ -1,0 +1,196 @@
+"""
+FastAPI Backend Service for AI Job Description–Driven Assessment Blueprint Builder
+Fulfills TCS Project Development Guideline: 'Backend APIs: FastAPI'.
+"""
+
+import os
+from typing import List, Optional, Dict, Any
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+
+import core
+
+app = FastAPI(
+    title="AI Assessment Blueprint Builder API",
+    description="Multi-Agent GenAI REST API for Job Description Analysis, Adaptive Blueprint Generation, Question Retrieval, and Candidate Simulation.",
+    version="1.0.0",
+)
+
+# Enable CORS for frontend clients (e.g., Streamlit, React, Gradio)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# ---------------------------------------------------------
+# Request / Response Schemas
+# ---------------------------------------------------------
+class TestKeyRequest(BaseModel):
+    api_key: str = Field(..., description="OpenAI API Key to validate")
+    model: str = Field("gpt-4o-mini", description="Target model name")
+
+
+class TestKeyResponse(BaseModel):
+    is_valid: bool
+    message: str
+
+
+class JDExtractRequest(BaseModel):
+    jd_text: str = Field(..., description="Raw text of the job description")
+    use_ai: bool = Field(False, description="Whether to invoke OpenAI or local rule-based extractor")
+    api_key: Optional[str] = Field(None, description="OpenAI API Key if use_ai is True")
+    model: Optional[str] = Field("gpt-4o-mini", description="Model identifier")
+
+
+class BlueprintRequest(BaseModel):
+    competencies: List[Dict[str, Any]] = Field(..., description="List of confirmed competencies")
+    seniority: str = Field("Mid", description="Seniority level: Entry, Junior, Mid, Senior, Lead")
+    total_questions: int = Field(10, ge=1, le=50)
+    duration: int = Field(60, ge=10, le=240)
+    easy_pct: int = Field(30, ge=0, le=100)
+    medium_pct: int = Field(50, ge=0, le=100)
+    hard_pct: int = Field(20, ge=0, le=100)
+
+
+class QuestionGenerateRequest(BaseModel):
+    competency: str
+    difficulty: str = Field("Medium", pattern="^(Easy|Medium|Hard)$")
+    jd_text: str
+    api_key: str
+    model: str = "gpt-4o-mini"
+
+
+class CandidateSimRequest(BaseModel):
+    blueprint: List[Dict[str, Any]]
+    duration: int = 60
+
+
+class HighlightRequest(BaseModel):
+    jd_text: str
+    competencies: List[Dict[str, Any]]
+
+
+# ---------------------------------------------------------
+# API Endpoints
+# ---------------------------------------------------------
+@app.get("/")
+def root():
+    return {
+        "service": "AI Assessment Blueprint Builder API",
+        "status": "online",
+        "documentation": "/docs",
+        "guideline_compliance": "FastAPI Backend per TCS Capstone Spec",
+    }
+
+
+@app.get("/api/health")
+def health_check():
+    env_key = os.getenv("OPENAI_API_KEY", "")
+    return {
+        "status": "healthy",
+        "taxonomy_competency_count": len(core.TAXONOMY),
+        "question_bank_size": len(core.QUESTION_BANK),
+        "env_key_configured": bool(env_key and env_key != "your_openai_api_key_here"),
+    }
+
+
+@app.post("/api/test-key", response_model=TestKeyResponse)
+def test_key_endpoint(req: TestKeyRequest):
+    is_valid, msg = core.test_openai_api_key(req.api_key, req.model)
+    return TestKeyResponse(is_valid=is_valid, message=msg)
+
+
+@app.get("/api/taxonomy")
+def get_taxonomy():
+    return core.TAXONOMY
+
+
+@app.get("/api/questions")
+def get_questions(
+    competency: Optional[str] = Query(None, description="Filter by competency"),
+    difficulty: Optional[str] = Query(None, description="Filter by difficulty"),
+):
+    questions = core.QUESTION_BANK
+    if competency:
+        questions = [q for q in questions if q["competency"].lower() == competency.lower()]
+    if difficulty:
+        questions = [q for q in questions if q["difficulty"].lower() == difficulty.lower()]
+    return {
+        "count": len(questions),
+        "questions": questions,
+    }
+
+
+@app.post("/api/extract-jd")
+def extract_job_description(req: JDExtractRequest):
+    if not req.jd_text.strip():
+        raise HTTPException(status_code=400, detail="Job description text cannot be empty.")
+    
+    try:
+        if req.use_ai and req.api_key:
+            result = core.ai_based_extraction(req.jd_text, req.api_key, req.model or "gpt-4o-mini")
+        else:
+            result = core.rule_based_extraction(req.jd_text)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Extraction failed: {str(e)}")
+
+
+@app.get("/api/adaptive-mix/{seniority}")
+def get_adaptive_mix(seniority: str):
+    return core.get_adaptive_difficulty_mix(seniority)
+
+
+@app.post("/api/build-blueprint")
+def generate_blueprint(req: BlueprintRequest):
+    blueprint, warnings = core.build_adaptive_blueprint(
+        competencies=req.competencies,
+        seniority=req.seniority,
+        total_questions=req.total_questions,
+        duration=req.duration,
+        easy_pct=req.easy_pct,
+        medium_pct=req.medium_pct,
+        hard_pct=req.hard_pct,
+    )
+    return {
+        "blueprint": blueprint,
+        "warnings": warnings,
+        "seniority": req.seniority,
+        "target_duration": req.duration,
+        "total_questions": req.total_questions,
+    }
+
+
+@app.post("/api/generate-question")
+def generate_draft_question(req: QuestionGenerateRequest):
+    if not req.api_key:
+        raise HTTPException(status_code=400, detail="OpenAI API Key is required for question generation.")
+    try:
+        draft = core.generate_gap_question(req.competency, req.jd_text, req.difficulty, req.api_key, req.model)
+        return draft
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Draft generation failed: {str(e)}")
+
+
+@app.post("/api/simulate-candidates")
+def simulate_candidates(req: CandidateSimRequest):
+    sim = core.run_candidate_simulation(req.blueprint, req.duration)
+    if not sim:
+        raise HTTPException(status_code=400, detail="Blueprint has no selected questions to simulate.")
+    return sim
+
+
+@app.post("/api/highlight-evidence")
+def highlight_evidence(req: HighlightRequest):
+    html = core.highlight_jd_text(req.jd_text, req.competencies)
+    return {"highlighted_html": html}
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("api:app", host="127.0.0.1", port=8000, reload=True)
