@@ -13,6 +13,9 @@ import time
 import requests
 import pandas as pd
 import streamlit as st
+from dotenv import load_dotenv
+
+load_dotenv(override=True)
 
 import core
 
@@ -43,8 +46,16 @@ def client_extract_jd(jd_text, use_ai, api_key, model, provider="Gemini"):
                 return r.json(), f"FastAPI Backend ({provider})"
         except Exception:
             pass
-    res = core.ai_based_extraction(jd_text, api_key, model, provider=provider) if (use_ai and api_key) else core.rule_based_extraction(jd_text)
-    return res, f"Local Core Engine ({provider})"
+    if use_ai and api_key:
+        try:
+            res = core.ai_based_extraction(jd_text, api_key, model, provider=provider)
+            return res, f"Local Core Engine ({provider})"
+        except Exception as ex:
+            res = core.rule_based_extraction(jd_text)
+            res["extraction_warning"] = f"AI extraction notice ({ex}). Fallback applied."
+            return res, f"Local Core Engine (Rule-based Fallback)"
+    res = core.rule_based_extraction(jd_text)
+    return res, f"Local Core Engine (Rule-based)"
 
 
 def client_build_blueprint(competencies, seniority, total_questions, duration, easy_pct, medium_pct, hard_pct):
@@ -114,7 +125,7 @@ st.set_page_config(
     page_title=APP_TITLE,
     page_icon="🎯",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="expanded"
 )
 
 # Custom Styling
@@ -126,6 +137,70 @@ st.markdown("""
     .api-badge-warn { background-color: #fef9c3; color: #854d0e; padding: 4px 12px; border-radius: 12px; font-weight: 600; font-size: 0.85rem; border: 1px solid #fde047; display: inline-block; margin-bottom: 12px; }
 </style>
 """, unsafe_allow_html=True)
+
+# ---------------------------------------------------------
+# Sidebar Configuration & Controls
+# ---------------------------------------------------------
+with st.sidebar:
+
+    st.markdown("### 🤖 GenAI Provider: Google Gemini")
+    provider_choice = "Google Gemini"
+    provider_code = "Gemini"
+
+    gemini_env = os.getenv("GEMINI_API_KEY", "") or os.getenv("GOOGLE_API_KEY", "") or os.getenv("OPENAI_API_KEY", "")
+    target_env_key = gemini_env
+    has_env_key = bool(target_env_key and target_env_key.strip())
+
+    ai_toggle = st.toggle("Enable Gemini Agent Mode", value=has_env_key, help="Uses Google Gemini API for structured extraction and scenario question synthesis.")
+    api_key_input = target_env_key
+    model_choice = "gemini-3.8-flash"
+
+    if ai_toggle:
+        if has_env_key:
+            st.caption("🔒 Gemini API Key auto-loaded from environment")
+        api_key_input = st.text_input(
+            "Gemini API Key",
+            value=target_env_key,
+            type="password",
+            help="Your Gemini API key is kept securely only in session memory."
+        )
+        model_choice = st.selectbox(
+            "Gemini Model",
+            ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-1.5-flash", "gemini-1.5-pro"],
+            index=0
+        )
+        
+        # Test API Key Button
+        if st.button("🔑 Test Gemini Connection", use_container_width=True):
+            with st.spinner("Testing Google Gemini connection..."):
+                is_up, _ = get_api_health()
+                if is_up:
+                    try:
+                        r = requests.post(f"{API_BASE_URL}/api/test-key", json={
+                            "api_key": api_key_input, "provider": "Gemini", "model": model_choice
+                        }, timeout=10)
+                        if r.ok:
+                            res = r.json()
+                            is_valid, msg = res["is_valid"], res["message"]
+                        else:
+                            is_valid, msg = core.test_ai_key(api_key_input, "Gemini", model_choice)
+                    except Exception:
+                        is_valid, msg = core.test_ai_key(api_key_input, "Gemini", model_choice)
+                else:
+                    is_valid, msg = core.test_ai_key(api_key_input, "Gemini", model_choice)
+
+                if is_valid:
+                    st.success(f"✅ {msg}")
+                else:
+                    st.error(f"❌ {msg}")
+
+    st.divider()
+    st.markdown("### 🏛️ System Architecture")
+    st.markdown("""
+    - **Frontend**: Streamlit (`port 8501`)
+    - **Backend**: FastAPI (`port 8000`)
+    - **Embeddings**: `all-MiniLM-L6-v2`
+    """)
 
 st.markdown(f'<div class="main-header">🎯 {APP_TITLE}</div>', unsafe_allow_html=True)
 st.markdown('<div class="sub-caption">Enterprise Multi-Agent Assessment Pipeline • Streamlit UI + FastAPI Backend Architecture</div>', unsafe_allow_html=True)
@@ -150,6 +225,11 @@ with c_st2:
         st.markdown('<div class="api-badge-ok">🧠 RAG Engine Active (FAISS + Chroma)</div>', unsafe_allow_html=True)
     else:
         st.markdown('<div class="api-badge-warn">⚪ Keyword Matcher Active</div>', unsafe_allow_html=True)
+with c_st3:
+    if ai_toggle and (api_key_input and api_key_input.strip()):
+        st.markdown(f'<div class="api-badge-ok">🔑 Gemini AI Active ({model_choice})</div>', unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="api-badge-warn">🔑 Gemini AI Inactive (Local Rule Engine)</div>', unsafe_allow_html=True)
 
 # Session State Initialization
 if "jd_text" not in st.session_state:
@@ -172,19 +252,6 @@ def log_audit(event):
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
         "event": event
     })
-
-
-# ---------------------------------------------------------
-# Sidebar Configuration & Controls
-# ---------------------------------------------------------
-provider_choice = "Google Gemini"
-provider_code = "Gemini"
-gemini_env = os.getenv("GEMINI_API_KEY", "") or os.getenv("GOOGLE_API_KEY", "")
-target_env_key = gemini_env
-has_env_key = bool(target_env_key and target_env_key.strip())
-ai_toggle = True
-api_key_input = target_env_key
-model_choice = "gemini-3.8-flash"
 
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "1. 🤖 JD Analysis & Evidence Map",
@@ -351,7 +418,10 @@ with tab2:
             },
             key="competency_data_editor"
         )
-        st.session_state.competencies = edited_comps
+        if hasattr(edited_comps, "to_dict"):
+            st.session_state.competencies = edited_comps.to_dict(orient="records")
+        elif isinstance(edited_comps, list):
+            st.session_state.competencies = list(edited_comps)
 
         if st.button("💾 Confirm Competency Mapping"):
             log_audit("Reviewer confirmed competency taxonomy mapping.")
@@ -403,10 +473,12 @@ with tab3:
         
         c_cfg1, c_cfg2, c_cfg3 = st.columns(3)
         with c_cfg1:
+            valid_seniorities = ["Entry", "Junior", "Mid", "Senior", "Lead"]
+            seniority_idx = valid_seniorities.index(detected_seniority) if detected_seniority in valid_seniorities else 2
             selected_seniority = st.selectbox(
                 "Role Seniority",
-                ["Entry", "Junior", "Mid", "Senior", "Lead"],
-                index=["Entry", "Junior", "Mid", "Senior", "Lead"].index(detected_seniority)
+                valid_seniorities,
+                index=seniority_idx
             )
         with c_cfg2:
             target_q_count = st.number_input("Total Questions", min_value=2, max_value=50, value=10)
@@ -443,6 +515,13 @@ with tab3:
             st.session_state.blueprint = blueprint
             st.session_state.warnings = warnings
             log_audit(f"Generated blueprint via {engine_used} ({target_q_count} questions for {selected_seniority} role).")
+
+        if st.session_state.warnings:
+            for w in st.session_state.warnings:
+                if "must equal 100%" in w or "No competencies" in w:
+                    st.error(f"⚠️ {w}")
+                else:
+                    st.warning(f"⚠️ {w}")
 
         if st.session_state.blueprint:
             st.divider()

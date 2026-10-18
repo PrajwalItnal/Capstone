@@ -621,10 +621,10 @@ def generate_clarification_questions(jd_text: str, competencies: list, seniority
         questions.append({
             "id": "CQ-02",
             "topic": "Quality Assurance & Testing",
-            "question": "Unit and integration testing expectations are not stated in the JD. Should 'Automated Testing & QA' be included in the assessment?",
+            "question": "Unit and integration testing expectations are not stated in the JD. Should 'Testing & Quality Assurance' be included in the assessment?",
             "options": ["Include Unit & Mock Testing questions", "Focus purely on feature coding", "Include system debugging only"],
             "recommended": "Include Unit & Mock Testing questions",
-            "action_competency": "Automated Testing & QA"
+            "action_competency": "Testing & Quality Assurance"
         })
 
     # 3. Cloud & Deployment ecosystem check
@@ -663,6 +663,31 @@ def generate_clarification_questions(jd_text: str, competencies: list, seniority
         })
 
     return questions
+
+
+def extract_json_from_llm_response(text: str) -> dict:
+    """Robustly extracts and parses JSON from an LLM response string."""
+    cleaned = text.strip()
+    cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.I)
+    cleaned = re.sub(r"\s*```$", "", cleaned)
+    try:
+        return json.loads(cleaned)
+    except Exception:
+        pass
+
+    match = re.search(r"(\{[\s\S]*\}|\[[\s\S]*\])", text)
+    if match:
+        candidate = match.group(1).strip()
+        try:
+            return json.loads(candidate)
+        except Exception:
+            fixed = re.sub(r",\s*([\]}])", r"\1", candidate)
+            try:
+                return json.loads(fixed)
+            except Exception:
+                pass
+
+    return json.loads(cleaned)
 
 
 def test_gemini_api_key(api_key: str, model: str = "gemini-3.8-flash") -> tuple[bool, str]:
@@ -704,7 +729,6 @@ def call_gemini_api(prompt: str, api_key: str, model: str = "gemini-3.8-flash", 
         raise RuntimeError("Install requests: pip install requests")
 
     key = api_key.strip()
-    # Normalize model name
     clean_model = model.replace("models/", "")
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{clean_model}:generateContent?key={key}"
 
@@ -725,6 +749,14 @@ def call_gemini_api(prompt: str, api_key: str, model: str = "gemini-3.8-flash", 
         }
 
     resp = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=90)
+    
+    # Graceful fallback to gemini-1.5-flash if selected model isn't supported on endpoint
+    if not resp.ok and clean_model != "gemini-1.5-flash":
+        fallback_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={key}"
+        fallback_resp = requests.post(fallback_url, headers={"Content-Type": "application/json"}, json=payload, timeout=90)
+        if fallback_resp.ok:
+            resp = fallback_resp
+
     if not resp.ok:
         err_msg = resp.text[:400]
         try:
@@ -735,11 +767,22 @@ def call_gemini_api(prompt: str, api_key: str, model: str = "gemini-3.8-flash", 
 
     data = resp.json()
     try:
-        candidate = data["candidates"][0]
-        text = candidate["content"]["parts"][0]["text"]
-        return text
-    except (KeyError, IndexError) as e:
-        raise RuntimeError(f"Unexpected response format from Gemini: {data}")
+        candidates = data.get("candidates", [])
+        if not candidates:
+            feedback = data.get("promptFeedback", {})
+            block_reason = feedback.get("blockReason", "No candidates returned by Gemini")
+            raise RuntimeError(f"Gemini did not return any candidates: {block_reason}")
+        candidate = candidates[0]
+        parts = candidate.get("content", {}).get("parts", [])
+        text_parts = [p.get("text", "") for p in parts if "text" in p]
+        if text_parts:
+            return "".join(text_parts)
+        finish_reason = candidate.get("finishReason", "UNKNOWN")
+        raise RuntimeError(f"Gemini candidate returned without text content (finishReason: {finish_reason})")
+    except Exception as e:
+        if isinstance(e, RuntimeError):
+            raise
+        raise RuntimeError(f"Unexpected response format from Gemini: {data}") from e
 
 
 def test_openai_api_key(api_key: str, model: str = "gpt-4o-mini") -> tuple[bool, str]:
@@ -851,8 +894,7 @@ Job Description:
 {jd_text[:14000]}
 """
     raw_response = call_ai_model(prompt, api_key, provider=provider, model=model)
-    cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw_response.strip(), flags=re.I)
-    parsed = json.loads(cleaned)
+    parsed = extract_json_from_llm_response(raw_response)
 
     normalized = []
     for item in parsed.get("competencies", []):
@@ -1151,8 +1193,7 @@ Job Description:
 {jd_text[:8000]}
 """
     raw = call_ai_model(prompt, api_key, provider=provider, model=model)
-    cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw.strip(), flags=re.I)
-    data = json.loads(cleaned)
+    data = extract_json_from_llm_response(raw)
     data["review_status"] = "Draft — human review required"
     return data
 

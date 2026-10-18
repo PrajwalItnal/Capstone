@@ -5,6 +5,10 @@ Fulfills Enterprise Project Guideline: 'Backend APIs: FastAPI'.
 
 import os
 from typing import List, Optional, Dict, Any
+from dotenv import load_dotenv
+
+load_dotenv(override=True)
+
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -124,7 +128,7 @@ def root():
     return {
         "service": "AI Assessment Blueprint Builder API",
         "status": "online",
-        "documentation": "/docs",
+        "documentation": "FastAPI REST API (Swagger UI disabled per project specification)",
         "guideline_compliance": "FastAPI Backend Enterprise Architecture Spec",
     }
 
@@ -175,7 +179,11 @@ def extract_job_description(req: JDExtractRequest):
     
     try:
         if req.use_ai and req.api_key:
-            result = core.ai_based_extraction(req.jd_text, req.api_key, req.model or "gemini-3.8-flash", provider=req.provider or "Gemini")
+            try:
+                result = core.ai_based_extraction(req.jd_text, req.api_key, req.model or "gemini-3.8-flash", provider=req.provider or "Gemini")
+            except Exception as ai_err:
+                result = core.rule_based_extraction(req.jd_text)
+                result["extraction_warning"] = f"AI extraction notice: {str(ai_err)}. Fallback to rule-based parser applied."
         else:
             result = core.rule_based_extraction(req.jd_text)
         return result
