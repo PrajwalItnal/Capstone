@@ -35,7 +35,7 @@ app.add_middleware(
 # ---------------------------------------------------------
 class TestKeyRequest(BaseModel):
     api_key: str = Field(..., description="API Key to validate")
-    provider: str = Field("Gemini", description="AI Provider: Gemini or OpenAI")
+    provider: str = Field("Gemini", description="AI Provider: Google Gemini")
     model: str = Field("gemini-1.5-flash", description="Target model name")
 
 
@@ -48,7 +48,7 @@ class JDExtractRequest(BaseModel):
     jd_text: str = Field(..., description="Raw text of the job description")
     use_ai: bool = Field(False, description="Whether to invoke AI or local rule-based extractor")
     api_key: Optional[str] = Field(None, description="API Key if use_ai is True")
-    provider: Optional[str] = Field("Gemini", description="AI Provider: Gemini or OpenAI")
+    provider: Optional[str] = Field("Gemini", description="AI Provider: Google Gemini")
     model: Optional[str] = Field("gemini-1.5-flash", description="Model identifier")
 
 
@@ -67,7 +67,7 @@ class QuestionGenerateRequest(BaseModel):
     difficulty: str = Field("Medium", pattern="^(Easy|Medium|Hard)$")
     jd_text: str
     api_key: str
-    provider: Optional[str] = Field("Gemini", description="AI Provider: Gemini or OpenAI")
+    provider: Optional[str] = Field("Gemini", description="AI Provider: Google Gemini")
     model: str = "gemini-1.5-flash"
 
 
@@ -131,12 +131,13 @@ def root():
 
 @app.get("/api/health")
 def health_check():
-    env_key = os.getenv("OPENAI_API_KEY", "")
+    gemini_key = os.getenv("GEMINI_API_KEY", "") or os.getenv("OPENAI_API_KEY", "")
     return {
         "status": "healthy",
+        "provider": "Google Gemini",
         "taxonomy_competency_count": len(core.TAXONOMY),
         "question_bank_size": len(core.QUESTION_BANK),
-        "env_key_configured": bool(env_key and env_key != "your_openai_api_key_here"),
+        "gemini_configured": bool(gemini_key and gemini_key != "your_openai_api_key_here"),
     }
 
 

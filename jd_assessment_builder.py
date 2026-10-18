@@ -175,58 +175,54 @@ def log_audit(event):
 with st.sidebar:
     st.header("⚙️ Settings & Agent Controls")
     
-    provider_choice = st.selectbox("AI Provider", ["Google Gemini", "OpenAI"], index=0)
-    provider_code = "Gemini" if provider_choice == "Google Gemini" else "OpenAI"
+    st.markdown("### 🤖 GenAI Provider: Google Gemini")
+    provider_choice = "Google Gemini"
+    provider_code = "Gemini"
 
-    gemini_env = os.getenv("GEMINI_API_KEY", "") or (os.getenv("OPENAI_API_KEY", "") if os.getenv("OPENAI_API_KEY", "").startswith(("AQ.", "AIza")) else "")
-    openai_env = os.getenv("OPENAI_API_KEY", "") if not os.getenv("OPENAI_API_KEY", "").startswith(("AQ.", "AIza")) else ""
-    
-    target_env_key = gemini_env if provider_code == "Gemini" else openai_env
+    gemini_env = os.getenv("GEMINI_API_KEY", "") or os.getenv("OPENAI_API_KEY", "")
+    target_env_key = gemini_env
     has_env_key = bool(target_env_key and target_env_key.strip() and target_env_key != "your_openai_api_key_here")
     
-    ai_toggle = st.toggle("Enable AI Agent Mode", value=has_env_key, help="Uses Google Gemini or OpenAI for structured extraction and scenario question synthesis.")
+    ai_toggle = st.toggle("Enable Gemini Agent Mode", value=has_env_key, help="Uses Google Gemini API for structured extraction and scenario question synthesis.")
     api_key_input = ""
-    model_choice = "gemini-1.5-flash" if provider_code == "Gemini" else "gpt-4o-mini"
+    model_choice = "gemini-1.5-flash"
     
     if ai_toggle:
         if has_env_key:
-            st.caption(f"🔒 {provider_choice} Key auto-loaded from `.env`")
+            st.caption("🔒 Gemini API Key auto-loaded from environment")
         api_key_input = st.text_input(
-            f"{provider_choice} API Key",
+            "Gemini API Key",
             value=target_env_key if target_env_key != "your_openai_api_key_here" else "",
             type="password",
-            help="Your key is kept only in session memory."
+            help="Your Gemini API key is kept securely only in session memory."
         )
-        if provider_code == "Gemini":
-            model_choice = st.selectbox("Gemini Model", ["gemini-1.5-flash", "gemini-2.5-flash", "gemini-1.5-pro"], index=0)
-        else:
-            model_choice = st.selectbox("OpenAI Model", ["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"], index=0)
+        model_choice = st.selectbox("Gemini Model", ["gemini-1.5-flash", "gemini-2.5-flash", "gemini-1.5-pro"], index=0)
         
         # Test API Key Button
-        if st.button(f"🔑 Test {provider_choice} Connection", use_container_width=True):
-            with st.spinner(f"Testing {provider_choice} connection..."):
+        if st.button("🔑 Test Gemini Connection", use_container_width=True):
+            with st.spinner("Testing Google Gemini connection..."):
                 is_up, _ = get_api_health()
                 if is_up:
                     try:
                         r = requests.post(f"{API_BASE_URL}/api/test-key", json={
-                            "api_key": api_key_input, "provider": provider_code, "model": model_choice
+                            "api_key": api_key_input, "provider": "Gemini", "model": model_choice
                         }, timeout=10)
                         if r.ok:
                             res = r.json()
                             is_valid, msg = res["is_valid"], res["message"]
                         else:
-                            is_valid, msg = core.test_ai_key(api_key_input, provider_code, model_choice)
+                            is_valid, msg = core.test_ai_key(api_key_input, "Gemini", model_choice)
                     except Exception:
-                        is_valid, msg = core.test_ai_key(api_key_input, provider_code, model_choice)
+                        is_valid, msg = core.test_ai_key(api_key_input, "Gemini", model_choice)
                 else:
-                    is_valid, msg = core.test_ai_key(api_key_input, provider_code, model_choice)
+                    is_valid, msg = core.test_ai_key(api_key_input, "Gemini", model_choice)
                 
                 if is_valid:
                     st.success(f"✅ {msg}")
-                    log_audit(f"{provider_choice} API Key test succeeded with model {model_choice}.")
+                    log_audit(f"Gemini API Key test succeeded with model {model_choice}.")
                 else:
                     st.error(f"❌ {msg}")
-                    log_audit(f"{provider_choice} API Key test failed: {msg}")
+                    log_audit(f"Gemini API Key test failed: {msg}")
 
     st.divider()
     st.markdown("### 🧠 Vector & RAG Engine")
@@ -605,7 +601,7 @@ with tab4:
                     st.error(f"Generation failed: {ex}")
 
         if not can_generate:
-            st.caption("ℹ️ Enable AI Agent Mode and provide an OpenAI API Key in the sidebar to generate new questions.")
+            st.caption("ℹ️ Enable Gemini Agent Mode and provide a Gemini API Key in the sidebar to generate new scenario questions.")
 
         if st.session_state.generated_questions:
             st.markdown("#### 📝 Pending Draft Questions for Human Review")

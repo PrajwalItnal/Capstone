@@ -1,7 +1,7 @@
 # AI Job Description–Driven Assessment Blueprint Builder
 ## Comprehensive Project Documentation & Mandatory Submission Evidence
 **Batch**: 50  
-**Stack**: Frontend (Streamlit) • Backend APIs (FastAPI) • GenAI Orchestration (Google Gemini / OpenAI & Local RAG: FAISS + ChromaDB)
+**Stack**: Frontend (Streamlit) • Backend APIs (FastAPI) • GenAI Orchestration (Google Gemini API & Local RAG: FAISS + ChromaDB)
 
 ---
 
@@ -154,7 +154,7 @@ The FastAPI service exposes the following endpoints on port 8000:
 |---|---|---|
 | `GET` | `/` | Root service health & guideline compliance info |
 | `GET` | `/api/health` | Backend status, taxonomy count, and question bank metrics |
-| `POST` | `/api/test-key` | Validates Gemini or OpenAI API key connectivity |
+| `POST` | `/api/test-key` | Validates Google Gemini API key connectivity |
 | `GET` | `/api/taxonomy` | Returns full 15-competency taxonomy with aliases |
 | `GET` | `/api/questions` | Filterable question bank queries (by competency & difficulty) |
 | `POST` | `/api/extract-jd` | Runs AI-driven or rule-based JD parsing |
@@ -179,6 +179,6 @@ The FastAPI service exposes the following endpoints on port 8000:
 - [x] **Backend**: FastAPI (`api.py`) active on `http://127.0.0.1:8000`.
 - [x] **Swagger UI**: Removed per project request (`docs_url=None`, `redoc_url=None`).
 - [x] **RAG Vector Search**: Operational with SentenceTransformer (`all-MiniLM-L6-v2`), FAISS, and ChromaDB.
-- [x] **AI Models**: Google Gemini 1.5 Flash (default) + OpenAI GPT-4o-mini support with auto-detection.
+- [x] **AI Models**: Google Gemini 1.5 Flash (default), Gemini 2.5 Flash, and Gemini 1.5 Pro.
 - [x] **Security**: API keys isolated in runtime memory and `.env` strictly protected from display.
 - [x] **Version Control**: Git repository configured and committed.
