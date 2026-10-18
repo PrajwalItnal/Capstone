@@ -600,7 +600,7 @@ def rule_based_extraction(jd_text: str) -> dict:
 def generate_clarification_questions(jd_text: str, competencies: list, seniority: str) -> list:
     """
     Identifies missing or ambiguous requirements and generates targeted clarification
-    questions for reviewer confirmation (TCS Spec Requirement #2).
+    questions for reviewer confirmation (Spec Requirement #2).
     """
     comp_names = {c["competency"].lower() for c in competencies}
     questions = []
@@ -665,7 +665,7 @@ def generate_clarification_questions(jd_text: str, competencies: list, seniority
     return questions
 
 
-def test_gemini_api_key(api_key: str, model: str = "gemini-1.5-flash") -> tuple[bool, str]:
+def test_gemini_api_key(api_key: str, model: str = "gemini-3.8-flash") -> tuple[bool, str]:
     """Validates Google Gemini API key."""
     if not api_key or not api_key.strip():
         return False, "Gemini API key is empty."
@@ -698,7 +698,7 @@ def test_gemini_api_key(api_key: str, model: str = "gemini-1.5-flash") -> tuple[
         return False, f"Gemini connection failed: {str(exc)}"
 
 
-def call_gemini_api(prompt: str, api_key: str, model: str = "gemini-1.5-flash", system_role: str = None) -> str:
+def call_gemini_api(prompt: str, api_key: str, model: str = "gemini-3.8-flash", system_role: str = None) -> str:
     """Calls Google Gemini API using standard REST generateContent endpoint."""
     if requests is None:
         raise RuntimeError("Install requests: pip install requests")
@@ -751,7 +751,7 @@ def test_openai_api_key(api_key: str, model: str = "gpt-4o-mini") -> tuple[bool,
 
     clean_key = api_key.strip()
     if clean_key.startswith("AQ.") or clean_key.startswith("AIza"):
-        return test_gemini_api_key(clean_key, model=model if "gemini" in model else "gemini-1.5-flash")
+        return test_gemini_api_key(clean_key, model=model if "gemini" in model else "gemini-3.8-flash")
 
     headers = {
         "Authorization": f"Bearer {clean_key}",
@@ -778,7 +778,7 @@ def call_openai_chat(prompt: str, api_key: str, model: str = "gpt-4o-mini", syst
 
     clean_key = api_key.strip() if api_key else ""
     if clean_key.startswith("AQ.") or clean_key.startswith("AIza"):
-        return call_gemini_api(prompt, clean_key, model=model if "gemini" in model else "gemini-1.5-flash", system_role=system_role)
+        return call_gemini_api(prompt, clean_key, model=model if "gemini" in model else "gemini-3.8-flash", system_role=system_role)
 
     headers = {
         "Authorization": f"Bearer {clean_key}",
@@ -806,16 +806,16 @@ def call_openai_chat(prompt: str, api_key: str, model: str = "gpt-4o-mini", syst
     return data["choices"][0]["message"]["content"]
 
 
-def call_ai_model(prompt: str, api_key: str, provider: str = "Gemini", model: str = "gemini-1.5-flash", system_role: str = "You are an expert technical recruiter and assessment architect.") -> str:
+def call_ai_model(prompt: str, api_key: str, provider: str = "Gemini", model: str = "gemini-3.8-flash", system_role: str = "You are an expert technical recruiter and assessment architect.") -> str:
     """Unified router for Gemini and OpenAI models."""
     prov = (provider or "Gemini").lower()
     if "gemini" in prov or "google" in prov or api_key.startswith("AQ.") or api_key.startswith("AIza"):
-        return call_gemini_api(prompt, api_key, model=model or "gemini-1.5-flash", system_role=system_role)
+        return call_gemini_api(prompt, api_key, model=model or "gemini-3.8-flash", system_role=system_role)
     else:
         return call_openai_chat(prompt, api_key, model=model or "gpt-4o-mini", system_role=system_role)
 
 
-def test_ai_key(api_key: str, provider: str = "Gemini", model: str = "gemini-1.5-flash") -> tuple[bool, str]:
+def test_ai_key(api_key: str, provider: str = "Gemini", model: str = "gemini-3.8-flash") -> tuple[bool, str]:
     """Unified key tester for Gemini and OpenAI."""
     prov = (provider or "Gemini").lower()
     if "gemini" in prov or "google" in prov or api_key.startswith("AQ.") or api_key.startswith("AIza"):
@@ -824,7 +824,7 @@ def test_ai_key(api_key: str, provider: str = "Gemini", model: str = "gemini-1.5
         return test_openai_api_key(api_key, model)
 
 
-def ai_based_extraction(jd_text: str, api_key: str, model: str = "gemini-1.5-flash", provider: str = "Gemini") -> dict:
+def ai_based_extraction(jd_text: str, api_key: str, model: str = "gemini-3.8-flash", provider: str = "Gemini") -> dict:
     prompt = f"""
 Analyze this Job Description and return ONLY valid JSON matching this schema:
 {{
@@ -1023,7 +1023,7 @@ def generate_explainability_report(
 ) -> dict:
     """
     Generates a comprehensive AI Explainability & Bias Audit report as required by
-    the TCS Capstone specification.
+    the Enterprise Capstone specification.
     Includes:
     - Competency selection rationale (JD evidence citations & weights)
     - Seniority-to-Difficulty alignment rationale
@@ -1124,7 +1124,7 @@ def generate_explainability_report(
     }
 
 
-def generate_gap_question(competency: str, jd_text: str, difficulty: str, api_key: str, model: str = "gemini-1.5-flash", provider: str = "Gemini") -> dict:
+def generate_gap_question(competency: str, jd_text: str, difficulty: str, api_key: str, model: str = "gemini-3.8-flash", provider: str = "Gemini") -> dict:
     prompt = f"""
 Create one high-quality, scenario-based or work-sample assessment question for:
 Competency: {competency}
@@ -1240,7 +1240,9 @@ def highlight_jd_text(jd_text: str, competencies: list) -> str:
     for term in sorted_terms:
         comp_name, color = term_color_map[term]
         pattern = re.compile(r"(?i)\b(" + re.escape(term) + r")\b")
-        replacement = f'<mark style="background-color: {color}; padding: 2px 5px; border-radius: 4px; font-weight: 600;" title="{comp_name} ({term})">\\1</mark>'
+        replacement = f'<mark style="background-color: {color}; color: #0f172a; padding: 2px 5px; border-radius: 4px; font-weight: 600;" title="{comp_name} ({term})">\\1</mark>'
         highlighted = pattern.sub(replacement, highlighted)
 
     return highlighted
+
+

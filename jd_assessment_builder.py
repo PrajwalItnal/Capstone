@@ -1,7 +1,7 @@
 """
 Streamlit Frontend for AI Job Description–Driven Assessment Blueprint Builder
 Connects to FastAPI Backend Service (http://127.0.0.1:8000) with automatic local fallback.
-Conforms to TCS Capstone Project Guidelines:
+Conforms to Enterprise Project Guidelines:
 - Frontend: Streamlit
 - Backend APIs: FastAPI
 """
@@ -23,6 +23,7 @@ API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:8000")
 # ---------------------------------------------------------
 # FastAPI Client Integration Wrappers
 # ---------------------------------------------------------
+@st.cache_data(ttl=15)
 def get_api_health():
     try:
         r = requests.get(f"{API_BASE_URL}/api/health", timeout=1.5)
@@ -113,7 +114,7 @@ st.set_page_config(
     page_title=APP_TITLE,
     page_icon="🎯",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
 
 # Custom Styling
@@ -131,7 +132,11 @@ st.markdown('<div class="sub-caption">Enterprise Multi-Agent Assessment Pipeline
 
 # Backend & RAG Engine status indicators
 backend_online, backend_meta = get_api_health()
-rag_inst = core.init_rag_system()
+@st.cache_resource
+def get_cached_rag():
+    return core.init_rag_system()
+
+rag_inst = get_cached_rag()
 rag_status = rag_inst.status() if rag_inst else {}
 
 c_st1, c_st2, c_st3 = st.columns([1.5, 2.2, 4])
@@ -172,90 +177,15 @@ def log_audit(event):
 # ---------------------------------------------------------
 # Sidebar Configuration & Controls
 # ---------------------------------------------------------
-with st.sidebar:
-    st.header("⚙️ Settings & Agent Controls")
-    
-    st.markdown("### 🤖 GenAI Provider: Google Gemini")
-    provider_choice = "Google Gemini"
-    provider_code = "Gemini"
+provider_choice = "Google Gemini"
+provider_code = "Gemini"
+gemini_env = os.getenv("GEMINI_API_KEY", "") or os.getenv("GOOGLE_API_KEY", "")
+target_env_key = gemini_env
+has_env_key = bool(target_env_key and target_env_key.strip())
+ai_toggle = True
+api_key_input = target_env_key
+model_choice = "gemini-3.8-flash"
 
-    gemini_env = os.getenv("GEMINI_API_KEY", "") or os.getenv("OPENAI_API_KEY", "")
-    target_env_key = gemini_env
-    has_env_key = bool(target_env_key and target_env_key.strip() and target_env_key != "your_openai_api_key_here")
-    
-    ai_toggle = st.toggle("Enable Gemini Agent Mode", value=has_env_key, help="Uses Google Gemini API for structured extraction and scenario question synthesis.")
-    api_key_input = ""
-    model_choice = "gemini-1.5-flash"
-    
-    if ai_toggle:
-        if has_env_key:
-            st.caption("🔒 Gemini API Key auto-loaded from environment")
-        api_key_input = st.text_input(
-            "Gemini API Key",
-            value=target_env_key if target_env_key != "your_openai_api_key_here" else "",
-            type="password",
-            help="Your Gemini API key is kept securely only in session memory."
-        )
-        model_choice = st.selectbox("Gemini Model", ["gemini-1.5-flash", "gemini-2.5-flash", "gemini-1.5-pro"], index=0)
-        
-        # Test API Key Button
-        if st.button("🔑 Test Gemini Connection", use_container_width=True):
-            with st.spinner("Testing Google Gemini connection..."):
-                is_up, _ = get_api_health()
-                if is_up:
-                    try:
-                        r = requests.post(f"{API_BASE_URL}/api/test-key", json={
-                            "api_key": api_key_input, "provider": "Gemini", "model": model_choice
-                        }, timeout=10)
-                        if r.ok:
-                            res = r.json()
-                            is_valid, msg = res["is_valid"], res["message"]
-                        else:
-                            is_valid, msg = core.test_ai_key(api_key_input, "Gemini", model_choice)
-                    except Exception:
-                        is_valid, msg = core.test_ai_key(api_key_input, "Gemini", model_choice)
-                else:
-                    is_valid, msg = core.test_ai_key(api_key_input, "Gemini", model_choice)
-                
-                if is_valid:
-                    st.success(f"✅ {msg}")
-                    log_audit(f"Gemini API Key test succeeded with model {model_choice}.")
-                else:
-                    st.error(f"❌ {msg}")
-                    log_audit(f"Gemini API Key test failed: {msg}")
-
-    st.divider()
-    st.markdown("### 🧠 Vector & RAG Engine")
-    if rag_status and rag_status.get("faiss"):
-        st.markdown(f"""
-        - **Embedding Model**: `{rag_status.get('model', 'all-MiniLM-L6-v2')}`
-        - **FAISS Vector Index**: `{rag_status.get('questions_indexed_faiss', 0)}` questions
-        - **ChromaDB Vector Store**: `{rag_status.get('questions_in_chromadb', 0)}` records
-        - **Taxonomy Embeddings**: `{rag_status.get('taxonomy_indexed_faiss', 0)}` competencies
-        """)
-    else:
-        st.caption("RAG vector engine in fallback keyword mode.")
-
-    st.markdown("### 🏛️ System Architecture")
-    st.markdown("""
-    - **Frontend**: Streamlit (`port 8501`)
-    - **Backend**: FastAPI (`port 8000`)
-    """)
-    st.markdown("### 🤖 5 Orchestrated Agent Roles")
-    st.markdown("""
-    1. **JD Analysis Agent**: Parses & extracts skills, tools, seniority
-    2. **Competency Mapping Agent**: Taxonomy normalization & ambiguity resolution
-    3. **Blueprint Design Agent**: Adaptive weight & difficulty allocation
-    4. **Question Retrieval Agent**: Multi-tag lookup & gap question synthesis
-    5. **Quality Review Agent**: Candidate simulation & bias/overlap audit
-    """)
-    st.divider()
-    st.caption("TCS Capstone Assessment Blueprint Architecture.")
-
-
-# ---------------------------------------------------------
-# Main Tabs (5 Stages)
-# ---------------------------------------------------------
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "1. 🤖 JD Analysis & Evidence Map",
     "2. 🧭 Competency Mapping & Review",
@@ -349,7 +279,7 @@ with tab1:
             if a.get("ambiguities"):
                 st.warning("⚠️ **Ambiguities Detected in JD:**\n" + "\n".join(f"- {amb}" for amb in a["ambiguities"]))
 
-        # TCS Requirement 2: Missing or Ambiguous Requirements for Reviewer Confirmation
+        # Requirement 2: Missing or Ambiguous Requirements for Reviewer Confirmation
         c_qs = a.get("clarification_questions", [])
         if c_qs:
             st.divider()
@@ -394,7 +324,7 @@ with tab1:
         st.caption("Visual phrase highlighting mapping detected skills to raw text context:")
         highlighted_html = client_highlight_evidence(st.session_state.jd_text, st.session_state.competencies)
         st.markdown(
-            f'<div style="background-color: #f1f5f9; padding: 16px; border-radius: 8px; border: 1px solid #cbd5e1; line-height: 1.8; max-height: 300px; overflow-y: auto;">{highlighted_html}</div>',
+            f'<div style="background-color: #f1f5f9; padding: 16px; border-radius: 8px; border: 1px solid #cbd5e1; color: #0f172a; line-height: 1.8; max-height: 300px; overflow-y: auto;">{highlighted_html}</div>',
             unsafe_allow_html=True
         )
 
@@ -673,7 +603,7 @@ with tab4:
             target_q = q_map[chosen_q_key]
 
             if st.button("🧪 Run RAG Vector Tag Audit", type="secondary"):
-                rag_engine = core.init_rag_system()
+                rag_engine = get_cached_rag()
                 if rag_engine:
                     audit_res = rag_engine.detect_wrong_tags(target_q["question"], target_q["competency"])
                     tag_recs = rag_engine.recommend_tags(target_q["question"], top_k=3)
@@ -804,4 +734,6 @@ with tab5:
         )
 
 st.divider()
-st.caption("AI Job Description–Driven Assessment Blueprint Builder • TCS Capstone Architecture")
+st.caption("AI Job Description–Driven Assessment Blueprint Builder • Enterprise AI Blueprint Architecture")
+
+

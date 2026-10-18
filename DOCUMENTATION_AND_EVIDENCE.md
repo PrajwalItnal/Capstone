@@ -7,7 +7,7 @@
 
 ## 1. System Architecture & Flowchart
 
-The system follows a clean Client-Server Microservices pattern fully compliant with TCS Capstone guidelines:
+The system follows a clean Client-Server Microservices pattern fully compliant with Enterprise Capstone guidelines:
 - **Frontend**: Streamlit UI (`http://localhost:8501`)
 - **Backend**: FastAPI REST Server (`http://127.0.0.1:8000`)
 - **Vector Retrieval**: Local RAG Engine (`SentenceTransformer all-MiniLM-L6-v2` + `FAISS` + `ChromaDB`)
@@ -92,7 +92,7 @@ The application orchestrates **5 specialized agents** to deliver an automated, a
 
 ---
 
-## 3. The 6 Innovative Workflows (TCS Capstone Specifications)
+## 3. The 6 Innovative Workflows (Enterprise Capstone Specifications)
 
 | # | Innovative Workflow | Implementation Mechanism | Location in UI |
 |---|---|---|---|

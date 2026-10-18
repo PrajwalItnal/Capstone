@@ -1,7 +1,7 @@
 """
 RAG Engine: Embedding-based Question Retrieval using FAISS + ChromaDB.
 Implements semantic skill matching, question tagging, and retrieval-augmented generation
-as required by the TCS Capstone project specification.
+as required by the Enterprise Capstone project specification.
 """
 
 import os

@@ -1,6 +1,6 @@
 """
 FastAPI Backend Service for AI Job Description–Driven Assessment Blueprint Builder
-Fulfills TCS Project Development Guideline: 'Backend APIs: FastAPI'.
+Fulfills Enterprise Project Guideline: 'Backend APIs: FastAPI'.
 """
 
 import os
@@ -36,7 +36,7 @@ app.add_middleware(
 class TestKeyRequest(BaseModel):
     api_key: str = Field(..., description="API Key to validate")
     provider: str = Field("Gemini", description="AI Provider: Google Gemini")
-    model: str = Field("gemini-1.5-flash", description="Target model name")
+    model: str = Field("gemini-3.8-flash", description="Target model name")
 
 
 class TestKeyResponse(BaseModel):
@@ -49,7 +49,7 @@ class JDExtractRequest(BaseModel):
     use_ai: bool = Field(False, description="Whether to invoke AI or local rule-based extractor")
     api_key: Optional[str] = Field(None, description="API Key if use_ai is True")
     provider: Optional[str] = Field("Gemini", description="AI Provider: Google Gemini")
-    model: Optional[str] = Field("gemini-1.5-flash", description="Model identifier")
+    model: Optional[str] = Field("gemini-3.8-flash", description="Model identifier")
 
 
 class BlueprintRequest(BaseModel):
@@ -68,7 +68,7 @@ class QuestionGenerateRequest(BaseModel):
     jd_text: str
     api_key: str
     provider: Optional[str] = Field("Gemini", description="AI Provider: Google Gemini")
-    model: str = "gemini-1.5-flash"
+    model: str = "gemini-3.8-flash"
 
 
 class CandidateSimRequest(BaseModel):
@@ -125,7 +125,7 @@ def root():
         "service": "AI Assessment Blueprint Builder API",
         "status": "online",
         "documentation": "/docs",
-        "guideline_compliance": "FastAPI Backend per TCS Capstone Spec",
+        "guideline_compliance": "FastAPI Backend Enterprise Architecture Spec",
     }
 
 
@@ -175,7 +175,7 @@ def extract_job_description(req: JDExtractRequest):
     
     try:
         if req.use_ai and req.api_key:
-            result = core.ai_based_extraction(req.jd_text, req.api_key, req.model or "gemini-1.5-flash", provider=req.provider or "Gemini")
+            result = core.ai_based_extraction(req.jd_text, req.api_key, req.model or "gemini-3.8-flash", provider=req.provider or "Gemini")
         else:
             result = core.rule_based_extraction(req.jd_text)
         return result
@@ -304,3 +304,5 @@ def submit_feedback(req: FeedbackEntryRequest):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("api:app", host="127.0.0.1", port=8000, reload=True)
+
+
