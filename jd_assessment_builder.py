@@ -347,7 +347,46 @@ with tab1:
             for b in a.get("observable_behaviors", []):
                 st.markdown(f"- {b}")
             if a.get("ambiguities"):
-                st.warning("⚠️ **Ambiguities / Questions for Reviewer:**\n" + "\n".join(f"- {amb}" for amb in a["ambiguities"]))
+                st.warning("⚠️ **Ambiguities Detected in JD:**\n" + "\n".join(f"- {amb}" for amb in a["ambiguities"]))
+
+        # TCS Requirement 2: Missing or Ambiguous Requirements for Reviewer Confirmation
+        c_qs = a.get("clarification_questions", [])
+        if c_qs:
+            st.divider()
+            st.markdown("### ❓ Missing & Ambiguous Requirements: Clarification Questions")
+            st.caption("The AI Agent identified missing or ambiguous requirements in the JD. Answer these questions to confirm specifications:")
+            
+            for q_idx, cq in enumerate(c_qs):
+                with st.expander(f"Question {q_idx+1}: {cq['topic']} — {cq['question'][:75]}...", expanded=True):
+                    st.markdown(f"**{cq['question']}**")
+                    chosen_opt = st.radio(
+                        "Reviewer Decision:",
+                        cq["options"],
+                        index=0,
+                        key=f"cq_opt_{q_idx}"
+                    )
+                    if st.button(f"Apply Action: {chosen_opt[:35]}...", key=f"cq_btn_{q_idx}"):
+                        act_comp = cq.get("action_competency")
+                        if act_comp:
+                            existing_names = [c["competency"] for c in st.session_state.competencies]
+                            if act_comp not in existing_names:
+                                st.session_state.competencies.append({
+                                    "competency": act_comp,
+                                    "category": "Technical",
+                                    "mandatory": "Mandatory" in chosen_opt or "Yes" in chosen_opt,
+                                    "proficiency": "Intermediate",
+                                    "importance": 4,
+                                    "confidence": 0.90,
+                                    "matched_terms": [act_comp],
+                                    "evidence": ["Added via Reviewer Clarification Answer"],
+                                })
+                            else:
+                                for c in st.session_state.competencies:
+                                    if c["competency"] == act_comp:
+                                        c["mandatory"] = "Mandatory" in chosen_opt or "Yes" in chosen_opt
+                            log_audit(f"Reviewer answered clarification question {cq['id']}: '{chosen_opt}'.")
+                            st.success(f"Requirement confirmed and applied: {act_comp}")
+                            st.rerun()
 
         # Innovative Workflow #1: Interactive JD Evidence Map
         st.divider()

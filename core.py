@@ -583,6 +583,8 @@ def rule_based_extraction(jd_text: str) -> dict:
     if not any(c["mandatory"] for c in found_competencies):
         ambiguities.append("No explicit mandatory skills marked in text ('must', 'required'). Please confirm core requirements.")
 
+    clarification_qs = generate_clarification_questions(jd_text, found_competencies, seniority)
+
     return {
         "role_title": f"{seniority} Software Engineer",
         "seniority": seniority,
@@ -591,7 +593,76 @@ def rule_based_extraction(jd_text: str) -> dict:
         "tools": tools,
         "observable_behaviors": behaviors,
         "ambiguities": ambiguities,
+        "clarification_questions": clarification_qs,
     }
+
+
+def generate_clarification_questions(jd_text: str, competencies: list, seniority: str) -> list:
+    """
+    Identifies missing or ambiguous requirements and generates targeted clarification
+    questions for reviewer confirmation (TCS Spec Requirement #2).
+    """
+    comp_names = {c["competency"].lower() for c in competencies}
+    questions = []
+
+    # 1. Database / SQL ambiguity check
+    if not any("sql" in c or "database" in c for c in comp_names):
+        questions.append({
+            "id": "CQ-01",
+            "topic": "Database Architecture",
+            "question": "The JD does not explicitly mention a primary database technology. Should 'SQL & Databases' be assessed as a mandatory core skill?",
+            "options": ["Yes, assess SQL & Database Design as Mandatory", "Yes, but as Secondary / Optional", "No database questions needed"],
+            "recommended": "Yes, assess SQL & Database Design as Mandatory",
+            "action_competency": "SQL & Databases"
+        })
+
+    # 2. Automated Testing / Quality check
+    if not any("test" in c for c in comp_names):
+        questions.append({
+            "id": "CQ-02",
+            "topic": "Quality Assurance & Testing",
+            "question": "Unit and integration testing expectations are not stated in the JD. Should 'Automated Testing & QA' be included in the assessment?",
+            "options": ["Include Unit & Mock Testing questions", "Focus purely on feature coding", "Include system debugging only"],
+            "recommended": "Include Unit & Mock Testing questions",
+            "action_competency": "Automated Testing & QA"
+        })
+
+    # 3. Cloud & Deployment ecosystem check
+    if not any("cloud" in c or "devops" in c or "docker" in c for c in comp_names):
+        questions.append({
+            "id": "CQ-03",
+            "topic": "DevOps & Cloud Deployment",
+            "question": "No deployment environment (Docker/Kubernetes/AWS) is specified. Should the assessment evaluate Cloud & DevOps basics?",
+            "options": ["Include containerization & CI/CD basics", "Purely algorithmic evaluation", "Include cloud architecture scenarios"],
+            "recommended": "Include containerization & CI/CD basics",
+            "action_competency": "Cloud & DevOps"
+        })
+
+    # 4. Seniority / System Design check
+    if seniority in ["Senior", "Lead"] and not any("design" in c or "architecture" in c for c in comp_names):
+        questions.append({
+            "id": "CQ-04",
+            "topic": "System Architecture & Scalability",
+            "question": f"For this {seniority} level role, high-scale system design was not explicitly detailed. Should distributed system trade-offs be tested?",
+            "options": ["Yes, allocate 20%+ weight to System Design", "Keep questions scoped to hands-on coding", "Focus on code refactoring"],
+            "recommended": "Yes, allocate 20%+ weight to System Design",
+            "action_competency": "System Design & Architecture"
+        })
+
+    # 5. Mandatory Disqualifier Check
+    mandatory_count = sum(1 for c in competencies if c.get("mandatory"))
+    if mandatory_count == 0 and competencies:
+        top_skill = competencies[0]["competency"]
+        questions.append({
+            "id": "CQ-05",
+            "topic": "Mandatory Disqualifiers",
+            "question": f"The JD does not use strict 'must-have' keywords. Should '{top_skill}' be designated as the primary mandatory filter?",
+            "options": [f"Mark '{top_skill}' as mandatory", "Treat all skills as equally weighted"],
+            "recommended": f"Mark '{top_skill}' as mandatory",
+            "action_competency": top_skill
+        })
+
+    return questions
 
 
 def test_gemini_api_key(api_key: str, model: str = "gemini-1.5-flash") -> tuple[bool, str]:
@@ -810,6 +881,7 @@ Job Description:
             deduped[name] = c
 
     parsed["competencies"] = list(deduped.values())
+    parsed["clarification_questions"] = generate_clarification_questions(jd_text, parsed["competencies"], parsed.get("seniority", "Mid"))
     return parsed
 
 
